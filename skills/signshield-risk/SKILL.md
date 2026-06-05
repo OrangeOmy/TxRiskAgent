@@ -1,6 +1,6 @@
 ---
 name: signshield-risk
-description: Analyze EVM pre-signature transaction JSON for SignShield-style wallet risk explanations. Use when Codex needs to inspect chainId/from/to/data/value/origin inputs, decode EVM calldata, classify approvals/transfers/multicalls/unknown contracts, score risk, and output structured JSON plus plain-language user warnings before signing.
+description: Analyze EVM pre-signature transaction JSON for SignShield-style wallet risk explanations, especially airdrop claim flows where a user may think they are claiming rewards but actually signs an approval, Permit, NFT operator permission, transfer, multicall, or unknown contract call.
 ---
 
 # SignShield Risk
@@ -10,6 +10,20 @@ description: Analyze EVM pre-signature transaction JSON for SignShield-style wal
 Produce a SignShield risk structure for EVM transaction requests before a user signs. Keep the workflow fact-first: decode and normalize transaction facts, apply deterministic rules, then explain those facts in natural language.
 
 This skill is EVM-only. For non-`eip155` chains, return an unsupported result instead of attempting chain-specific analysis.
+
+## Airdrop Claim Safety Focus
+
+Use this narrower flow when the user, origin, fixture name, page context, or goal mentions `claim`, `airdrop`, `rewards`, `gasless`, `verify`, `mint free`, or wallet verification.
+
+The goal is not to prove whether an airdrop exists. The goal is to decide what the pending wallet action actually does before signing:
+
+- Does a claimed `claim` actually call `approve(address,uint256)`?
+- Does a claimed `gasless claim` actually create a Permit or Permit2-style spending authorization?
+- Does a claimed NFT verification actually call `setApprovalForAll(address,bool)`?
+- Does a claim bundle hide approvals, transfers, or unknown calls behind `multicall` or router-style `execute`?
+- Is the selector or contract opaque enough that the system should warn about missing evidence instead of implying safety?
+
+For airdrop-like flows, always explain the mismatch between the user's likely expectation and the decoded intent when facts support it. Prefer language such as "This is not just a claim" or "Gasless does not mean harmless" when the structured facts show approval or Permit behavior.
 
 ## Quick Start
 
@@ -64,10 +78,13 @@ uv run python skills/signshield-risk/scripts/analyze_evm_tx.py dump-tx --subagen
 3. Classify intent.
    Route to one primary category: `NATIVE_TRANSFER`, `ERC20_APPROVAL`, `NFT_APPROVAL`, `TOKEN_TRANSFER`, `MULTICALL`, `UNKNOWN_CONTRACT`, or `UNSUPPORTED_CHAIN`.
 
-4. Score and separate risk domains.
+4. Apply the airdrop overlay when context is claim-like.
+   Compare the user-facing claim context with the actual decoded branch. Treat `ERC20_APPROVAL`, Permit/Permit2, `NFT_APPROVAL`, `TOKEN_TRANSFER`, and opaque `MULTICALL`/`UNKNOWN_CONTRACT` as potential claim-intent mismatches. If the current output schema does not yet expose explicit `claimedIntent` or `intentMismatch` fields, describe the mismatch in `summary`, `riskFactors`, and `recommendation`.
+
+5. Score and separate risk domains.
    Keep technical risk, scam/phishing risk, and compliance risk as separate lists and score contributions. Never conflate OFAC/compliance hits with contract exploit evidence.
 
-5. Explain only structured facts.
+6. Explain only structured facts.
    Generate summaries and recommendations from decoded facts, simulation facts, reputation facts, and limitations. Do not invent source verification, deployment age, labels, or simulation outcomes if they were not observed.
 
 ## Risk Branches
@@ -79,6 +96,19 @@ uv run python skills/signshield-risk/scripts/analyze_evm_tx.py dump-tx --subagen
 - `MULTICALL`: detect `multicall`, `execute`, or arbitrary-call selectors; recursively decode embedded calls when the implementation adds support.
 - `UNKNOWN_CONTRACT`: use when selector is unknown, source is unavailable, proxy implementation is unverified, or facts are insufficient.
 - `UNSUPPORTED_CHAIN`: use for any non-EVM chain.
+
+## Airdrop Demo Corpus
+
+The strongest airdrop-specific fixtures are:
+
+- `dump-tx/2026-06-03T00-01-00-000Z-erc20-unlimited-approval-phishing.json`: fake claim page asks for unlimited ERC20 approval.
+- `dump-tx/2026-06-03T00-03-00-000Z-eip2612-permit-unlimited-drainer.json`: gasless claim creates a Permit approval.
+- `dump-tx/2026-06-03T00-04-00-000Z-nft-setapprovalforall-fake-airdrop.json`: NFT airdrop verification grants collection-wide operator approval.
+- `dump-tx/2026-06-03T00-09-00-000Z-multicall-hidden-approval-and-transfer.json`: claim bundle hides approval and transfer payloads.
+- `dump-tx/2026-06-03T00-11-00-000Z-universal-router-execute-permit2-style-drain.json`: router/Permit2-style claim bundle.
+- `dump-tx/2026-06-03T00-12-00-000Z-unknown-claim-rewards-selector.json`: claim-like unknown selector.
+
+Use `docs/airdrop-security-cases.md` for the case library and `docs/airdrop-demo-storyline.md` for the hackathon presentation sequence.
 
 ## Output Contract
 
@@ -96,6 +126,8 @@ Return JSON compatible with `references/output_schema.md`. Every result should i
 - Read `references/risk_branches.md` when changing branch logic.
 - Read `references/output_schema.md` when changing JSON fields.
 - Read `references/external_adapters.md` when changing live provider integrations.
+- Read `docs/airdrop-security-cases.md` when changing airdrop claim, Permit, NFT approval, multicall, or unknown-claim behavior.
+- Read `docs/airdrop-demo-storyline.md` when preparing or changing the hackathon demo script.
 - Read `dump-tx/certik-token-scan-erc20-risk-summary.md` when changing ERC20 token-risk profile fields or CertiK-style scoring rules.
 - Use `scripts/analyze_evm_tx.py` as the deterministic baseline implementation.
 

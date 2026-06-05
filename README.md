@@ -5,6 +5,33 @@ SignShield-style EVM pre-signature transaction risk analyzer.
 The project analyzes wallet transaction JSON before signing. It decodes EVM calldata, classifies approvals/transfers/multicalls/unknown calls, enriches facts through optional real-world adapters, scores risk, and emits structured JSON plus Chinese plain-language warnings.
 For ERC20 interactions it also builds a CertiK-style token risk profile covering owner privileges, honeypot/sell restrictions, tax controls, proxy/source transparency, bytecode signals, holder concentration, and LP lock facts when available.
 
+## Airdrop Safety Track
+
+This fork also includes an airdrop-focused demo track: **Airdrop Claim Pre-Signature Risk Agent**. The goal is to detect when a user thinks they are claiming an airdrop, but the pending wallet action actually grants an approval, Permit, NFT operator permission, transfer, bundled call, or opaque unknown-contract entrypoint.
+
+Start here:
+
+```text
+docs/airdrop-security-cases.md
+docs/airdrop-demo-storyline.md
+```
+
+Focused airdrop demo fixtures:
+
+```bash
+mkdir -p output/risk-reports-airdrop
+for fixture in \
+  dump-tx/2026-06-03T00-01-00-000Z-erc20-unlimited-approval-phishing.json \
+  dump-tx/2026-06-03T00-03-00-000Z-eip2612-permit-unlimited-drainer.json \
+  dump-tx/2026-06-03T00-04-00-000Z-nft-setapprovalforall-fake-airdrop.json \
+  dump-tx/2026-06-03T00-09-00-000Z-multicall-hidden-approval-and-transfer.json \
+  dump-tx/2026-06-03T00-11-00-000Z-universal-router-execute-permit2-style-drain.json \
+  dump-tx/2026-06-03T00-12-00-000Z-unknown-claim-rewards-selector.json
+do
+  uv run python skills/signshield-risk/scripts/analyze_evm_tx.py "$fixture" --output output/risk-reports-airdrop
+done
+```
+
 ## Quick Start
 
 ```bash
