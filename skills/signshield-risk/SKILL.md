@@ -99,7 +99,7 @@ uv run python skills/signshield-risk/scripts/analyze_evm_tx.py dump-tx --subagen
 
 ## Airdrop Demo Corpus
 
-The strongest airdrop-specific fixtures are:
+The core airdrop demo fixtures are:
 
 - `dump-tx/2026-06-03T00-01-00-000Z-erc20-unlimited-approval-phishing.json`: fake claim page asks for unlimited ERC20 approval.
 - `dump-tx/2026-06-03T00-03-00-000Z-eip2612-permit-unlimited-drainer.json`: gasless claim creates a Permit approval.
@@ -108,7 +108,11 @@ The strongest airdrop-specific fixtures are:
 - `dump-tx/2026-06-03T00-11-00-000Z-universal-router-execute-permit2-style-drain.json`: router/Permit2-style claim bundle.
 - `dump-tx/2026-06-03T00-12-00-000Z-unknown-claim-rewards-selector.json`: claim-like unknown selector.
 
-Use `docs/airdrop-security-cases.md` for the case library and `docs/airdrop-demo-storyline.md` for the hackathon presentation sequence.
+Use `docs/airdrop-security-cases.md` for the core and extended case library,
+including adjacent excessive-approval, revoke-control, direct-outflow,
+`transferFrom`, deadline-multicall, address-poisoning, and native-drainer
+fixtures. Use `docs/airdrop-demo-storyline.md` for the hackathon presentation
+sequence.
 
 ## Output Contract
 

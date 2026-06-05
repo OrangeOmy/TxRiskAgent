@@ -16,7 +16,7 @@ docs/airdrop-security-cases.md
 docs/airdrop-demo-storyline.md
 ```
 
-Focused airdrop demo fixtures:
+Core airdrop demo fixtures:
 
 ```bash
 mkdir -p output/risk-reports-airdrop
@@ -32,10 +32,33 @@ do
 done
 ```
 
+If `uv` is not installed, the deterministic analyzer also runs with plain
+Python:
+
+```bash
+mkdir -p output/risk-reports-airdrop
+for fixture in \
+  dump-tx/2026-06-03T00-01-00-000Z-erc20-unlimited-approval-phishing.json \
+  dump-tx/2026-06-03T00-03-00-000Z-eip2612-permit-unlimited-drainer.json \
+  dump-tx/2026-06-03T00-04-00-000Z-nft-setapprovalforall-fake-airdrop.json \
+  dump-tx/2026-06-03T00-09-00-000Z-multicall-hidden-approval-and-transfer.json \
+  dump-tx/2026-06-03T00-11-00-000Z-universal-router-execute-permit2-style-drain.json \
+  dump-tx/2026-06-03T00-12-00-000Z-unknown-claim-rewards-selector.json
+do
+  python3 skills/signshield-risk/scripts/analyze_evm_tx.py "$fixture" --output output/risk-reports-airdrop
+done
+```
+
 ## Quick Start
 
 ```bash
 uv run python skills/signshield-risk/scripts/analyze_evm_tx.py dump-tx --output output/risk-reports
+```
+
+Without `uv`:
+
+```bash
+python3 skills/signshield-risk/scripts/analyze_evm_tx.py dump-tx --output output/risk-reports
 ```
 
 Live enrichment mode:
@@ -96,6 +119,15 @@ Subagent live mode uses `SIGNSSHIELD_SUBAGENT_COMMAND`. The command reads contex
 ```bash
 uv lock
 uv run pytest -q
+python3 -m py_compile $(find skills/signshield-risk/scripts -name '*.py' | sort)
+```
+
+Without `uv`, install the runtime/test dependencies in your active Python
+environment and run the same checks directly:
+
+```bash
+python3 -m pip install requests pytest
+python3 -m pytest -q
 python3 -m py_compile $(find skills/signshield-risk/scripts -name '*.py' | sort)
 ```
 

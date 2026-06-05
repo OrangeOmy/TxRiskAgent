@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 from signshield import analyze_transaction
 from signshield.subagent_context_builder import build_subagent_context
@@ -94,5 +95,5 @@ def test_command_subagent_harness_accepts_json_stdout(tmp_path) -> None:
         "import json, sys; json.load(sys.stdin); print(json.dumps({'status':'ok','assessments':[],'limitations':[]}))",
         encoding="utf-8",
     )
-    result = run_subagent_harness("live", {"x": 1}, command=f"python {script}")
+    result = run_subagent_harness("live", {"x": 1}, command=f"{sys.executable} {script}")
     assert result == {"status": "ok", "assessments": [], "limitations": []}

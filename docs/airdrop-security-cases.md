@@ -10,7 +10,27 @@ question is:
 The cases below are synthetic offline fixtures from `dump-tx/`. Do not broadcast
 them or interact with any fixture address.
 
-## Case Matrix
+## Fixture Numbering
+
+The labels `00-01`, `00-03`, and similar names are shorthand for the synthetic
+fixtures listed in `dump-tx/description.txt`. They come from the timestamped
+file names:
+
+```text
+2026-06-03T00-01-00-000Z-erc20-unlimited-approval-phishing.json
+2026-06-03T00-03-00-000Z-eip2612-permit-unlimited-drainer.json
+...
+```
+
+They are not on-chain transaction ids. They are local test cases that model
+different pre-signature risk branches.
+
+## Core Case Matrix
+
+Use these six cases for the main airdrop claim demo. They are intentionally
+small enough to present in a few minutes while still covering the dominant
+attack paths: approval, Permit, NFT operator approval, bundles, router-style
+execution, and unknown selectors.
 
 | Case | Claimed user action | Actual pre-signature behavior | Primary branch | Demo value |
 | --- | --- | --- | --- | --- |
@@ -20,6 +40,33 @@ them or interact with any fixture address.
 | `00-09` | Claim through a bundled flow | `multicall(bytes[])` with hidden approval/transfer payload | `MULTICALL` | Explains why wallet popups often miss nested intent |
 | `00-11` | Claim through router / Permit2-style flow | Universal Router-style `execute` bundle | `MULTICALL` | Covers router and Permit2-style pre-signature risk |
 | `00-12` | Claim rewards from unknown contract | Unknown selector and opaque parameters | `UNKNOWN_CONTRACT` | Teaches "unknown is not safe" |
+
+## Extended Research Corpus
+
+The full airdrop-safety research set should be larger than the core demo. Use
+these adjacent fixtures to test negative controls, direct outflow, existing
+allowance reuse, migration-style bundles, and address-poisoning variants.
+
+| Case | Fixture | Why it belongs in the broader airdrop-safety corpus |
+| --- | --- | --- |
+| `00-01` | `erc20-unlimited-approval-phishing` | Core fake claim -> unlimited approval |
+| `00-02` | `erc20-large-approval-fake-swap` | Fake migration/swap page requests a very large approval; useful for non-unlimited but excessive allowance rules |
+| `00-03` | `eip2612-permit-unlimited-drainer` | Core gasless claim -> Permit authorization |
+| `00-04` | `nft-setapprovalforall-fake-airdrop` | Core NFT airdrop verify -> collection-wide operator permission |
+| `00-05` | `nft-setapprovalforall-revoke-benign` | Benign revoke control so the system does not flag `setApprovalForAll(false)` as a drainer |
+| `00-06` | `token-transfer-to-drainer` | Fake support/refund style page causing direct token outflow |
+| `00-08` | `transferfrom-prior-allowance-drain` | Fake allowance check that reuses existing approval to drain assets |
+| `00-09` | `multicall-hidden-approval-and-transfer` | Core bundle with hidden approval and transfer payloads |
+| `00-10` | `multicall-deadline-fake-migration` | Deadline-based migration bundle with hidden approval and transfer behavior |
+| `00-11` | `universal-router-execute-permit2-style-drain` | Core router / Permit2-style bundle |
+| `00-12` | `unknown-claim-rewards-selector` | Core unknown claim selector |
+| `00-14` | `native-address-poisoning-lookalike` | Adjacent wallet-safety case: poisoned recipient looks familiar |
+| `00-15` | `native-transfer-to-synthetic-drainer` | Adjacent native-asset outflow to a fixture drainer |
+
+Cases `00-07`, `00-13`, and `00-16` through `00-22` are still useful for the
+overall TxRiskAgent corpus, but they are less central to the airdrop claim
+storyline. Keep them for broader token-risk, protocol-risk, burn-address, and
+unknown-contract coverage rather than the first airdrop demo.
 
 ## 00-01 Fake Claim -> Unlimited ERC20 Approval
 

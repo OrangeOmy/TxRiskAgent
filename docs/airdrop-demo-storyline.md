@@ -27,7 +27,7 @@ Run the deterministic offline analyzer:
 uv run python skills/signshield-risk/scripts/analyze_evm_tx.py dump-tx --output output/risk-reports
 ```
 
-For a focused airdrop-only run, use the six relevant fixtures:
+For the core airdrop demo run, use the six highest-signal fixtures:
 
 ```bash
 mkdir -p output/risk-reports-airdrop
@@ -40,6 +40,37 @@ for fixture in \
   dump-tx/2026-06-03T00-12-00-000Z-unknown-claim-rewards-selector.json
 do
   uv run python skills/signshield-risk/scripts/analyze_evm_tx.py "$fixture" --output output/risk-reports-airdrop
+done
+```
+
+Without `uv`, replace the inner command with:
+
+```bash
+python3 skills/signshield-risk/scripts/analyze_evm_tx.py "$fixture" --output output/risk-reports-airdrop
+```
+
+For a broader airdrop-safety research run, include adjacent cases for excessive
+approval, benign revoke, direct token outflow, `transferFrom`, deadline
+multicall, address poisoning, and native drainer transfer:
+
+```bash
+mkdir -p output/risk-reports-airdrop-extended
+for fixture in \
+  dump-tx/2026-06-03T00-01-00-000Z-erc20-unlimited-approval-phishing.json \
+  dump-tx/2026-06-03T00-02-00-000Z-erc20-large-approval-fake-swap.json \
+  dump-tx/2026-06-03T00-03-00-000Z-eip2612-permit-unlimited-drainer.json \
+  dump-tx/2026-06-03T00-04-00-000Z-nft-setapprovalforall-fake-airdrop.json \
+  dump-tx/2026-06-03T00-05-00-000Z-nft-setapprovalforall-revoke-benign.json \
+  dump-tx/2026-06-03T00-06-00-000Z-token-transfer-to-drainer.json \
+  dump-tx/2026-06-03T00-08-00-000Z-transferfrom-prior-allowance-drain.json \
+  dump-tx/2026-06-03T00-09-00-000Z-multicall-hidden-approval-and-transfer.json \
+  dump-tx/2026-06-03T00-10-00-000Z-multicall-deadline-fake-migration.json \
+  dump-tx/2026-06-03T00-11-00-000Z-universal-router-execute-permit2-style-drain.json \
+  dump-tx/2026-06-03T00-12-00-000Z-unknown-claim-rewards-selector.json \
+  dump-tx/2026-06-03T00-14-00-000Z-native-address-poisoning-lookalike.json \
+  dump-tx/2026-06-03T00-15-00-000Z-native-transfer-to-synthetic-drainer.json
+do
+  uv run python skills/signshield-risk/scripts/analyze_evm_tx.py "$fixture" --output output/risk-reports-airdrop-extended
 done
 ```
 
