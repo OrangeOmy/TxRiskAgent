@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from signshield.http_service import create_app, options_from_env
+from signshield.http_service import _api_key_is_valid, create_app, options_from_env
 from signshield.types import AnalysisOptions
 
 
@@ -74,6 +74,26 @@ def test_tx_scan_accepts_configured_api_key(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["schemaVersion"] == "signshield-risk/v0.2"
+
+
+def test_tx_scan_accepts_non_ascii_configured_api_key(monkeypatch) -> None:
+    assert _api_key_is_valid("服务-key", "服务-key") is True
+    wire_value = "服务-key".encode("utf-8").decode("latin-1")
+    assert _api_key_is_valid("服务-key", wire_value) is True
+
+
+def test_tx_scan_rejects_ascii_key_when_configured_key_is_non_ascii(monkeypatch) -> None:
+    monkeypatch.setenv("TX_RISK_API_KEY", "服务-key")
+    client = client_for_offline_service()
+
+    response = client.post(
+        "/tx-scan",
+        headers={"X-API-Key": "wrong-key"},
+        json=load_dump("2026-06-02T11-14"),
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"] == "unauthorized"
 
 
 def test_tx_scan_accepts_flat_transaction_payload() -> None:

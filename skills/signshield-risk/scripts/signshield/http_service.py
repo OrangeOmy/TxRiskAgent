@@ -203,7 +203,15 @@ def _api_key_is_valid(expected: str, provided: str | None) -> bool:
         return True
     if not provided:
         return False
-    return secrets.compare_digest(provided, expected)
+    expected_bytes = expected.encode("utf-8")
+    provided_candidates = [provided.encode("utf-8")]
+    try:
+        header_bytes = provided.encode("latin-1")
+    except UnicodeEncodeError:
+        header_bytes = None
+    if header_bytes is not None and header_bytes not in provided_candidates:
+        provided_candidates.append(header_bytes)
+    return any(secrets.compare_digest(candidate, expected_bytes) for candidate in provided_candidates)
 
 
 def _openapi_schema(app: FastAPI) -> dict[str, Any]:
