@@ -19,6 +19,7 @@ from .types import DEFAULT_REQUEST_TIMEOUT, AnalysisOptions
 SCHEMA_VERSION = "signshield-risk/v0.2"
 SERVICE_NAME = "tx-risk-agent"
 VALID_MODES = {"offline", "live-best-effort", "production"}
+VALID_AGENT_LOOPS = {"off", "kimi"}
 API_KEY_ENV = "TX_RISK_API_KEY"
 
 
@@ -166,6 +167,9 @@ def options_from_env() -> AnalysisOptions:
     mode = os.getenv("SIGNSSHIELD_HTTP_MODE", "production").strip() or "production"
     if mode not in VALID_MODES:
         raise ValueError(f"SIGNSSHIELD_HTTP_MODE must be one of: {', '.join(sorted(VALID_MODES))}")
+    agent_loop = os.getenv("SIGNSSHIELD_AGENT_LOOP", "off").strip() or "off"
+    if agent_loop not in VALID_AGENT_LOOPS:
+        raise ValueError(f"SIGNSSHIELD_AGENT_LOOP must be one of: {', '.join(sorted(VALID_AGENT_LOOPS))}")
 
     return AnalysisOptions(
         live=mode != "offline",
@@ -186,6 +190,12 @@ def options_from_env() -> AnalysisOptions:
         subagent_mode=os.getenv("SIGNSSHIELD_SUBAGENT_MODE", "off"),
         subagent_command=os.getenv("SIGNSSHIELD_SUBAGENT_COMMAND"),
         allow_fixture_risk=False,
+        agent_loop=agent_loop,
+        agent_loop_backend="kimi",
+        agent_loop_model=os.getenv("KIMI_MODEL_NAME"),
+        agent_loop_timeout=_float_env("SIGNSSHIELD_AGENT_LOOP_TIMEOUT", DEFAULT_REQUEST_TIMEOUT),
+        agent_loop_max_steps=_int_env("SIGNSSHIELD_AGENT_LOOP_MAX_STEPS", 6),
+        agent_loop_fallback=_bool_env("SIGNSSHIELD_AGENT_LOOP_FALLBACK", True),
     )
 
 
@@ -269,6 +279,13 @@ def _float_env(name: str, default: float) -> float:
     if value is None or not value.strip():
         return default
     return float(value)
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return int(value)
 
 
 def _csv_env(name: str) -> list[str]:

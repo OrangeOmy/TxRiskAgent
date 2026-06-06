@@ -63,8 +63,45 @@ def analyze_transaction(
     address_profile_provider: AddressProfileProvider | None = None,
     token_metadata_provider: TokenMetadataProvider | None = None,
     subagent_client: SubagentClient | None = None,
+    agent_loop_client: Any | None = None,
 ) -> dict[str, Any]:
     options = options or AnalysisOptions()
+    if options.agent_loop != "off":
+        from dataclasses import replace
+
+        from .agent_loop import AgentLoopError, analyze_with_agent_loop
+
+        try:
+            return analyze_with_agent_loop(payload, input_ref, options=options, client=agent_loop_client)
+        except AgentLoopError as exc:
+            if not options.agent_loop_fallback:
+                raise
+            fallback_options = replace(options, agent_loop="off")
+            result = analyze_transaction(
+                payload,
+                input_ref,
+                options=fallback_options,
+                calldata_resolver=calldata_resolver,
+                simulation_adapter=simulation_adapter,
+                contract_adapter=contract_adapter,
+                threat_adapter=threat_adapter,
+                address_profile_provider=address_profile_provider,
+                token_metadata_provider=token_metadata_provider,
+                subagent_client=subagent_client,
+            )
+            evidence = result.setdefault("evidence", {})
+            if isinstance(evidence, dict):
+                evidence["agentLoop"] = {
+                    "status": "error",
+                    "backend": options.agent_loop_backend,
+                    "error": str(exc)[:300],
+                    "fallback": "deterministic",
+                }
+                limitations = evidence.setdefault("limitations", [])
+                if isinstance(limitations, list):
+                    limitations.append(f"Agent loop failed; deterministic fallback used: {exc}")
+            return result
+
     mode = resolve_mode(options)
     allow_fixture_risk = options.allow_fixture_risk and mode != "production"
 

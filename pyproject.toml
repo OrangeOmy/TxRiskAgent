@@ -5,6 +5,7 @@ description = "Reproducible SignShield EVM pre-signature risk analysis prototype
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
+    "kimi-agent-sdk>=0.0.5 ; python_full_version >= '3.12'",
     "openai>=1.0",
     "pyyaml>=6.0",
     "requests>=2.32",

@@ -33,6 +33,12 @@ class AnalysisOptions:
     subagent_mode: str = "off"
     subagent_command: str | None = None
     allow_fixture_risk: bool = True
+    agent_loop: str = "off"
+    agent_loop_backend: str = "kimi"
+    agent_loop_model: str | None = None
+    agent_loop_timeout: float = DEFAULT_REQUEST_TIMEOUT
+    agent_loop_max_steps: int | None = 6
+    agent_loop_fallback: bool = True
 
 
 class CalldataResolver(Protocol):

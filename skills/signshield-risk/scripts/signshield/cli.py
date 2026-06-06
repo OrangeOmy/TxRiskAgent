@@ -47,6 +47,11 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=float(os.getenv("SIGNSSHIELD_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)), help="HTTP request timeout for live providers in seconds.")
     parser.add_argument("--subagent", choices=["off", "dry-run", "live"], default=os.getenv("SIGNSSHIELD_SUBAGENT_MODE", "off"))
     parser.add_argument("--subagent-command", default=os.getenv("SIGNSSHIELD_SUBAGENT_COMMAND"))
+    parser.add_argument("--agent-loop", choices=["off", "kimi"], default=os.getenv("SIGNSSHIELD_AGENT_LOOP", "off"), help="Use an agent loop for the final risk report. Defaults to off.")
+    parser.add_argument("--agent-loop-model", default=os.getenv("KIMI_MODEL_NAME"), help="Model name for the Kimi agent loop.")
+    parser.add_argument("--agent-loop-timeout", type=float, default=float(os.getenv("SIGNSSHIELD_AGENT_LOOP_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)), help="Agent loop timeout in seconds.")
+    parser.add_argument("--agent-loop-max-steps", type=int, default=int(os.getenv("SIGNSSHIELD_AGENT_LOOP_MAX_STEPS", "6")), help="Maximum Kimi agent steps for one analysis turn.")
+    parser.add_argument("--no-agent-loop-fallback", action="store_true", help="Raise agent-loop failures instead of falling back to deterministic analysis.")
     parser.add_argument("--output-format", choices=["compact", "full"], default="compact", help="Output compact user JSON by default; use full for forensic evidence.")
     parser.add_argument("--summary-llm", choices=["off", "live"], default="live", help="Apply final LLM summary to compact output. Full output never calls this layer.")
     parser.add_argument("--allow-fixture-risk", action="store_true", help="Allow local fixture labels to create high-confidence risk factors outside offline mode.")
@@ -69,6 +74,12 @@ def main() -> int:
         subagent_mode=args.subagent,
         subagent_command=args.subagent_command,
         allow_fixture_risk=(mode == "offline" or args.allow_fixture_risk),
+        agent_loop=args.agent_loop,
+        agent_loop_backend="kimi",
+        agent_loop_model=args.agent_loop_model,
+        agent_loop_timeout=args.agent_loop_timeout,
+        agent_loop_max_steps=args.agent_loop_max_steps,
+        agent_loop_fallback=not args.no_agent_loop_fallback,
     )
 
     files = iter_input_files(args.input)

@@ -175,3 +175,13 @@ def test_options_from_env_accepts_timeout_override(monkeypatch) -> None:
     options = options_from_env()
 
     assert options.timeout == 45.0
+
+
+def test_options_from_env_accepts_agent_loop_override(monkeypatch) -> None:
+    monkeypatch.setenv("SIGNSSHIELD_AGENT_LOOP", "kimi")
+    monkeypatch.setenv("SIGNSSHIELD_AGENT_LOOP_MAX_STEPS", "4")
+
+    options = options_from_env()
+
+    assert options.agent_loop == "kimi"
+    assert options.agent_loop_max_steps == 4

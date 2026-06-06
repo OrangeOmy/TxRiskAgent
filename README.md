@@ -117,6 +117,23 @@ source .env
 uv run python skills/signshield-risk/scripts/analyze_evm_tx.py dump-tx/2026-06-03T00-18-00-000Z-erc20-high-sell-tax-token.json --subagent live --subagent-command "uv run python skills/signshield-risk/scripts/openai_subagent.py"
 ```
 
+Kimi Agent SDK loop:
+
+```bash
+export KIMI_API_KEY=...
+export KIMI_BASE_URL=https://api.moonshot.ai/v1
+export KIMI_MODEL_NAME=kimi-k2-thinking-turbo
+uv run python skills/signshield-risk/scripts/analyze_evm_tx.py dump-tx/<file>.json --agent-loop kimi --output-format full
+```
+
+The Kimi loop is opt-in. It prompts a Kimi agent to first call the read-only
+`CollectEvmPrimitives` tool, which exposes normalized wallet input, decoded
+calldata, simulation, contract reputation, threat intelligence, ERC20 token
+risk profile, provider health, evidence quality, and deterministic candidate
+risk signals. The agent must return the same `signshield-risk/v0.2` JSON report
+shape. Invalid agent output falls back to deterministic analysis by default and
+records the failure under `evidence.agentLoop`.
+
 `.env` is gitignored. Do not commit local API keys or provider tokens.
 
 ## Live Adapters
@@ -142,6 +159,10 @@ export SIGNSSHIELD_RPC_URL=...
 export SIGNSSHIELD_SUBAGENT_COMMAND=...
 export SIGNSSHIELD_OPENAI_MODEL=gpt-5.5
 export SIGNSSHIELD_OPENAI_REASONING_EFFORT=medium
+export SIGNSSHIELD_AGENT_LOOP=off
+export KIMI_API_KEY=...
+export KIMI_BASE_URL=https://api.moonshot.ai/v1
+export KIMI_MODEL_NAME=kimi-k2-thinking-turbo
 ```
 
 HTTP service environment variables:
@@ -152,6 +173,8 @@ export SIGNSSHIELD_HTTP_MODE=production
 export SIGNSSHIELD_PUBLIC_RPC_FALLBACK=true
 export SIGNSSHIELD_CORS_ORIGINS=*
 export SIGNSSHIELD_TIMEOUT=30
+export SIGNSSHIELD_AGENT_LOOP=off
+export SIGNSSHIELD_AGENT_LOOP_FALLBACK=true
 ```
 
 Missing credentials are reported in `evidence.limitations`; they do not abort analysis.
