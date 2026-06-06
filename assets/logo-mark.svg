@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 220 220" role="img" aria-labelledby="title desc">
+  <title id="title">TxRiskAgent mark</title>
+  <desc id="desc">A hexagonal transaction graph mark with a risk alert node.</desc>
+  <defs>
+    <linearGradient id="hexGradient" x1="42" y1="42" x2="186" y2="178" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#19d3ff"/>
+      <stop offset="0.45" stop-color="#4263eb"/>
+      <stop offset="1" stop-color="#1f2937"/>
+    </linearGradient>
+    <linearGradient id="alertGradient" x1="74" y1="64" x2="166" y2="157" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd166"/>
+      <stop offset="1" stop-color="#ff5a5f"/>
+    </linearGradient>
+    <filter id="graphShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#09111f" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <g filter="url(#graphShadow)">
+    <path d="M111 26 178 64v92l-67 38-67-38V64l67-38Z" fill="url(#hexGradient)"/>
+    <path d="M111 47 160 75v65l-49 28-49-28V75l49-28Z" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.55" stroke-width="4"/>
+    <path d="M82 96h58M111 71v77M82 125l58-29M82 96l58 29" fill="none" stroke="#dbeafe" stroke-opacity="0.86" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="82" cy="96" r="12" fill="#ffffff"/>
+    <circle cx="140" cy="96" r="12" fill="#ffffff"/>
+    <circle cx="82" cy="125" r="12" fill="#ffffff"/>
+    <circle cx="140" cy="125" r="12" fill="url(#alertGradient)"/>
+    <circle cx="111" cy="71" r="10" fill="#ffffff"/>
+    <circle cx="111" cy="148" r="10" fill="#ffffff"/>
+    <circle cx="111" cy="111" r="20" fill="#111827"/>
+    <path d="M111 94 128 126H94l17-32Z" fill="#ffd166"/>
+    <rect x="108" y="105" width="6" height="13" rx="3" fill="#111827"/>
+    <circle cx="111" cy="122" r="3" fill="#111827"/>
+  </g>
+</svg>

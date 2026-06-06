@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import AnalysisOptions, CalldataResolver, ContractReputationAdapter, SimulationAdapter, SubagentClient, ThreatIntelAdapter, TokenMetadataProvider
+from .types import AnalysisOptions, AddressProfileProvider, CalldataResolver, ContractReputationAdapter, SimulationAdapter, SubagentClient, ThreatIntelAdapter, TokenMetadataProvider
 
 
 class DefenseRuntime:
@@ -14,6 +14,7 @@ class DefenseRuntime:
         simulation_adapter: SimulationAdapter | None = None,
         contract_adapter: ContractReputationAdapter | None = None,
         threat_adapter: ThreatIntelAdapter | None = None,
+        address_profile_provider: AddressProfileProvider | None = None,
         token_metadata_provider: TokenMetadataProvider | None = None,
         subagent_client: SubagentClient | None = None,
     ) -> None:
@@ -22,6 +23,7 @@ class DefenseRuntime:
         self.simulation_adapter = simulation_adapter
         self.contract_adapter = contract_adapter
         self.threat_adapter = threat_adapter
+        self.address_profile_provider = address_profile_provider
         self.token_metadata_provider = token_metadata_provider
         self.subagent_client = subagent_client
 
@@ -36,6 +38,7 @@ class DefenseRuntime:
             simulation_adapter=self.simulation_adapter,
             contract_adapter=self.contract_adapter,
             threat_adapter=self.threat_adapter,
+            address_profile_provider=self.address_profile_provider,
             token_metadata_provider=self.token_metadata_provider,
             subagent_client=self.subagent_client,
         )

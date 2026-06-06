@@ -18,8 +18,21 @@ def load_dump(name_prefix: str) -> dict:
 def test_bsc_approve_fixture_is_critical() -> None:
     result = analyze_transaction(load_dump("2026-06-02T09-47"))
     assert result["intent"]["category"] == "ERC20_APPROVAL"
+    assert result["intent"]["decodedFunction"] == "approve(address,uint256)"
     assert result["verdict"]["riskLevel"] == "CRITICAL"
     assert result["verdict"]["recommendedAction"] == "REJECT"
+    assert {factor["id"] for factor in result["riskFactors"]} >= {"erc20_approval", "known_malicious_spender"}
+
+
+def test_stringified_transaction_payload_is_decoded_like_object_payload() -> None:
+    payload = load_dump("2026-06-02T09-47")
+    payload["transaction"] = json.dumps(payload["transaction"])
+
+    result = analyze_transaction(payload)
+
+    assert result["intent"]["category"] == "ERC20_APPROVAL"
+    assert result["intent"]["decodedFunction"] == "approve(address,uint256)"
+    assert result["evidence"]["calldata"]["selector"] == "0x095ea7b3"
     assert {factor["id"] for factor in result["riskFactors"]} >= {"erc20_approval", "known_malicious_spender"}
 
 
@@ -89,8 +102,192 @@ def test_simulation_outflow_does_not_add_generic_asset_change_factor() -> None:
 
     result = analyze_transaction(load_dump("2026-06-02T11-14"), options=AnalysisOptions(mode="live-best-effort"), simulation_adapter=FakeSimulation())
     factor_ids = {factor["id"] for factor in result["riskFactors"]}
-    assert "simulation_wallet_asset_outflow" in factor_ids
+    assert "simulation_wallet_asset_outflow" not in factor_ids
     assert "simulation_asset_change_present" not in factor_ids
+
+
+def test_live_native_transfer_to_eoa_is_not_rejected_without_address_risk() -> None:
+    recipient = "0x0e2194468c40010656313ce24cee52e934cced03"
+    payload = {
+        "chainId": "eip155:1",
+        "transaction": {
+            "from": "0xb7c360aaa4c2b9f727ff934baa6ba300ccc0f284",
+            "to": recipient,
+            "value": "0x16345785d8a0000",
+            "data": "0x",
+        },
+        "transactionOrigin": "http://127.0.0.1:5173",
+    }
+
+    class FakeAddressProfile:
+        def inspect(self, chain_id: int, address: str | None) -> dict:
+            return {
+                "status": "ok",
+                "address": address,
+                "addressType": "EOA",
+                "isContract": False,
+                "codeSizeBytes": 0,
+            }
+
+    class FakeSimulation:
+        def simulate(self, chain_id: int, tx: dict) -> dict:
+            return {
+                "status": "ok",
+                "provider": "tenderly",
+                "facts": [
+                    {
+                        "type": "asset_change",
+                        "walletDirection": "out",
+                        "symbol": "ETH",
+                        "amountFormatted": "0.1",
+                        "from": tx["from"].lower(),
+                        "to": recipient,
+                    }
+                ],
+            }
+
+    class FakeContractReputation:
+        def inspect(self, chain_id: int, address: str | None) -> dict:
+            raise AssertionError("EOA recipients should not be inspected as contracts")
+
+    class FakeThreatIntel:
+        def inspect(self, chain_id: int, addresses: list[str], origin: str | None) -> dict:
+            return {
+                "status": "no_matches",
+                "matches": [],
+                "providers": {
+                    "goplusAddress": {
+                        "status": "ok",
+                        "provider": "goplus_address_security",
+                        "matches": [],
+                        "addressReports": {recipient: {"malicious_address": "0"}},
+                    }
+                },
+            }
+
+    result = analyze_transaction(
+        payload,
+        options=AnalysisOptions(mode="production"),
+        address_profile_provider=FakeAddressProfile(),
+        simulation_adapter=FakeSimulation(),
+        contract_adapter=FakeContractReputation(),
+        threat_adapter=FakeThreatIntel(),
+    )
+
+    factor_ids = {factor["id"] for factor in result["riskFactors"]}
+    assert result["evidence"]["addressProfile"]["addressType"] == "EOA"
+    assert result["evidence"]["contractReputation"]["status"] == "not_applicable"
+    assert "etherscan_source_unverified" not in factor_ids
+    assert "simulation_wallet_asset_outflow" not in factor_ids
+    assert result["verdict"]["recommendedAction"] == "CONTINUE"
+
+
+def test_bnb_native_transfer_to_eip7702_delegated_eoa_scans_delegate_contract() -> None:
+    recipient = "0x8865c8ff2a1cf8b235143110244f340db8513876"
+    delegate = "0x63c0c19a282a1b52b07dd5a65b58948a07dae32b"
+    payload = {
+        "chainId": "eip155:56",
+        "transaction": {
+            "from": "0xb7c360aaa4c2b9f727ff934baa6ba300ccc0f284",
+            "to": recipient,
+            "value": "0x16345785d8a0000",
+            "data": "0x",
+        },
+        "transactionOrigin": "http://127.0.0.1:5173",
+    }
+
+    class FakeAddressProfile:
+        def inspect(self, chain_id: int, address: str | None) -> dict:
+            return {
+                "status": "ok",
+                "address": address,
+                "addressType": "EIP7702_DELEGATED_EOA",
+                "isContract": True,
+                "isDelegated": True,
+                "delegation": {
+                    "type": "EIP7702",
+                    "indicator": "0xef0100",
+                    "delegateAddress": delegate,
+                },
+                "codeSizeBytes": 23,
+            }
+
+    class FakeSimulation:
+        def simulate(self, chain_id: int, tx: dict) -> dict:
+            return {
+                "status": "ok",
+                "provider": "tenderly",
+                "facts": [
+                    {
+                        "type": "asset_change",
+                        "walletDirection": "out",
+                        "symbol": "BNB",
+                        "amountFormatted": "0.1",
+                        "from": tx["from"].lower(),
+                        "to": recipient,
+                    }
+                ],
+            }
+
+    class FakeContractReputation:
+        def inspect(self, chain_id: int, address: str | None) -> dict:
+            assert address == delegate
+            return {
+                "status": "ok",
+                "address": address,
+                "facts": [],
+                "etherscan": {
+                    "status": "ok",
+                    "provider": "etherscan",
+                    "sourceVerified": False,
+                    "proxy": False,
+                    "securitySignals": {},
+                    "nametag": {},
+                },
+                "blockscout": {"status": "config_missing", "provider": "blockscout"},
+            }
+
+    class FakeThreatIntel:
+        def inspect(self, chain_id: int, addresses: list[str], origin: str | None) -> dict:
+            return {
+                "status": "no_matches",
+                "matches": [],
+                "providers": {
+                    "goplusAddress": {
+                        "status": "ok",
+                        "provider": "goplus_address_security",
+                        "matches": [],
+                        "addressReports": {
+                            recipient: {
+                                "contract_address": "1",
+                                "malicious_address": "0",
+                                "phishing_activities": "0",
+                                "stealing_attack": "0",
+                            }
+                        },
+                    }
+                },
+            }
+
+    result = analyze_transaction(
+        payload,
+        options=AnalysisOptions(mode="production"),
+        address_profile_provider=FakeAddressProfile(),
+        simulation_adapter=FakeSimulation(),
+        contract_adapter=FakeContractReputation(),
+        threat_adapter=FakeThreatIntel(),
+    )
+
+    factor_ids = {factor["id"] for factor in result["riskFactors"]}
+    assert result["evidence"]["addressProfile"]["addressType"] == "EIP7702_DELEGATED_EOA"
+    assert result["evidence"]["addressProfile"]["delegation"]["delegateAddress"] == delegate
+    assert result["evidence"]["contractReputation"]["address"] == delegate
+    assert result["evidence"]["contractReputation"]["recipientAddress"] == recipient
+    assert result["evidence"]["contractReputation"]["delegation"]["delegateAddress"] == delegate
+    assert "etherscan_source_unverified" in factor_ids
+    assert "goplus_address_security_match" not in factor_ids
+    assert "simulation_wallet_asset_outflow" not in factor_ids
+    assert result["verdict"]["recommendedAction"] == "CONTINUE_WITH_CAUTION"
 
 
 def test_all_dump_fixtures_analyze_offline() -> None:

@@ -3,7 +3,7 @@
   "description": "TxRiskAgent transaction insight Snap demo.",
   "proposedName": "TxRiskAgent Demo",
   "source": {
-    "shasum": "LowrEs79z+rssbrpYJOEBWqHDVfA2rLMDoG9jsy6uIY=",
+    "shasum": "dykx2I1GZZws3W46xrvpgFtsu9V4M3wkceoGs51TgV0=",
     "location": {
       "npm": {
         "filePath": "dist/bundle.js",
@@ -20,6 +20,7 @@
       "allowTransactionOrigin": true
     },
     "endowment:network-access": {},
+    "snap_manageState": {},
     "snap_dialog": {}
   },
   "platformVersion": "11.1.1",

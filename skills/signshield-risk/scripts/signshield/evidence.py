@@ -15,14 +15,16 @@ from .adapters import (
 from .adapters.http import HttpClient
 from .decode import decode_calldata
 from .contract_bytecode_scanner import scan_contract_bytecode
+from .rpc import AddressProfileResolver
 from .token_metadata import TokenMetadataResolver
 from .token_security_normalizer import build_erc20_token_risk_profile
-from .types import AnalysisOptions, CalldataResolver, ContractReputationAdapter, SimulationAdapter, ThreatIntelAdapter, TokenMetadataProvider
+from .types import AnalysisOptions, AddressProfileProvider, CalldataResolver, ContractReputationAdapter, SimulationAdapter, ThreatIntelAdapter, TokenMetadataProvider
 
 
 @dataclass
 class EvidenceBundle:
     decoded: dict[str, Any]
+    address_profile: dict[str, Any]
     simulation: dict[str, Any]
     contract_reputation: dict[str, Any]
     threat_intel: dict[str, Any]
@@ -42,6 +44,7 @@ class EvidenceOrchestrator:
         simulation_adapter: SimulationAdapter | None = None,
         contract_adapter: ContractReputationAdapter | None = None,
         threat_adapter: ThreatIntelAdapter | None = None,
+        address_profile_provider: AddressProfileProvider | None = None,
         token_metadata_provider: TokenMetadataProvider | None = None,
     ) -> None:
         self.options = options
@@ -50,6 +53,7 @@ class EvidenceOrchestrator:
         self.simulation_adapter = simulation_adapter
         self.contract_adapter = contract_adapter
         self.threat_adapter = threat_adapter
+        self.address_profile_provider = address_profile_provider
         self.token_metadata_provider = token_metadata_provider
         if self.mode != "offline":
             client = HttpClient(timeout=options.timeout)
@@ -57,6 +61,11 @@ class EvidenceOrchestrator:
             self.simulation_adapter = self.simulation_adapter or TenderlySimulationAdapter(options.tenderly_account, options.tenderly_project, options.tenderly_access_key, client=client)
             self.contract_adapter = self.contract_adapter or CompositeContractReputationAdapter(options.etherscan_api_key, options.blockscout_base_url, client=client)
             self.threat_adapter = self.threat_adapter or CompositeThreatIntelAdapter(options.goplus_base_url, options.metamask_config_url, client=client)
+            self.address_profile_provider = self.address_profile_provider or AddressProfileResolver(
+                options.rpc_url,
+                client=client,
+                public_fallback=options.public_rpc_fallback,
+            )
         self.token_metadata_provider = self.token_metadata_provider or TokenMetadataResolver(
             options.rpc_url,
             client=HttpClient(timeout=options.timeout),
@@ -89,8 +98,49 @@ class EvidenceOrchestrator:
         else:
             provider_health.append(_health("simulation", "not_run", "live_provider", participated=False))
 
+        address_profile = {"status": "not_run"}
+        if self.address_profile_provider and to_addr:
+            address_profile, health = self._call_provider("address_profile", "live_provider", lambda: self.address_profile_provider.inspect(chain_id, to_addr))
+            provider_health.append(health)
+        else:
+            provider_health.append(_health("address_profile", "not_run", "live_provider", participated=False))
+
         contract_reputation = {"status": "not_run", "facts": []}
-        if self.contract_adapter:
+        delegation = address_profile.get("delegation") if isinstance(address_profile.get("delegation"), dict) else {}
+        delegate_address = delegation.get("delegateAddress")
+        if address_profile.get("addressType") == "EOA":
+            contract_reputation = {
+                "status": "not_applicable",
+                "address": to_addr,
+                "facts": [],
+                "reason": "recipient_is_eoa",
+                "addressProfile": address_profile,
+            }
+            provider_health.append(_health("contract_reputation", "not_applicable", "live_provider", participated=False))
+        elif address_profile.get("addressType") == "EIP7702_DELEGATED_EOA" and self.contract_adapter and delegate_address:
+            contract_reputation, health = self._call_provider(
+                "contract_reputation",
+                "live_provider",
+                lambda: self.contract_adapter.inspect(chain_id, delegate_address),
+            )
+            contract_reputation["recipientAddress"] = to_addr
+            contract_reputation["inspectedAddress"] = delegate_address
+            contract_reputation["inspectionTarget"] = "eip7702_delegate"
+            contract_reputation["addressProfile"] = address_profile
+            contract_reputation["delegation"] = delegation
+            provider_health.append(health)
+        elif address_profile.get("addressType") == "EIP7702_DELEGATED_EOA":
+            contract_reputation = {
+                "status": "not_run",
+                "address": delegate_address,
+                "recipientAddress": to_addr,
+                "facts": [],
+                "reason": "delegate_contract_adapter_missing",
+                "addressProfile": address_profile,
+                "delegation": delegation,
+            }
+            provider_health.append(_health("contract_reputation", "not_run", "live_provider", participated=False))
+        elif self.contract_adapter:
             contract_reputation, health = self._call_provider("contract_reputation", "live_provider", lambda: self.contract_adapter.inspect(chain_id, to_addr))
             provider_health.append(health)
         else:
@@ -131,6 +181,7 @@ class EvidenceOrchestrator:
         evidence_quality = build_evidence_quality(self.mode, provider_health, erc20_profile)
         return EvidenceBundle(
             decoded=decoded,
+            address_profile=address_profile,
             simulation=simulation,
             contract_reputation=contract_reputation,
             threat_intel=threat_intel,

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from signshield import analyze_transaction
-from signshield.rpc import PublicRpcResolver, RpcEndpoint, check_public_rpc_endpoints
+from signshield.rpc import AddressProfileResolver, PublicRpcResolver, RpcEndpoint, check_public_rpc_endpoints
 from signshield.token_metadata import TokenMetadataResolver
 from signshield.types import AnalysisOptions
 
@@ -79,6 +79,50 @@ def test_explicit_rpc_url_takes_precedence_without_probe() -> None:
     assert result["source"] == "explicit"
     assert result["url"] == "https://explicit.example"
     assert client.calls == []
+
+
+def test_address_profile_uses_eth_get_code_to_classify_eoa_and_contract() -> None:
+    client = FakeRpcClient({})
+
+    def post_json(url: str, *, payload: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
+        client.calls.append((url, payload))
+        if payload["method"] == "eth_getCode":
+            address = payload["params"][0]
+            if address == "0x00000000000000000000000000000000000000aa":
+                return {"result": "0x"}
+            return {"result": "0x60806040"}
+        return {"error": {"message": "unexpected"}}
+
+    client.post_json = post_json  # type: ignore[method-assign]
+    resolver = AddressProfileResolver("https://rpc.example", client=client)
+
+    eoa = resolver.inspect(1, "0x00000000000000000000000000000000000000aa")
+    contract = resolver.inspect(1, "0x00000000000000000000000000000000000000bb")
+
+    assert eoa["addressType"] == "EOA"
+    assert eoa["isContract"] is False
+    assert contract["addressType"] == "CONTRACT"
+    assert contract["isContract"] is True
+
+
+def test_address_profile_detects_eip7702_delegated_eoa() -> None:
+    client = FakeRpcClient({})
+
+    def post_json(url: str, *, payload: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
+        client.calls.append((url, payload))
+        if payload["method"] == "eth_getCode":
+            return {"result": "0xef010063c0c19a282a1b52b07dd5a65b58948a07dae32b"}
+        return {"error": {"message": "unexpected"}}
+
+    client.post_json = post_json  # type: ignore[method-assign]
+    result = AddressProfileResolver("https://rpc.example", client=client).inspect(
+        56,
+        "0x8865c8ff2a1cf8b235143110244f340db8513876",
+    )
+
+    assert result["addressType"] == "EIP7702_DELEGATED_EOA"
+    assert result["isDelegated"] is True
+    assert result["delegation"]["delegateAddress"] == "0x63c0c19a282a1b52b07dd5a65b58948a07dae32b"
 
 
 def test_check_public_rpc_endpoints_probes_registered_endpoints() -> None:

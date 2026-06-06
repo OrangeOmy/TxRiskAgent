@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .adapters import (
@@ -22,7 +23,7 @@ from .subagent_context_builder import build_subagent_context
 from .subagent_harness import apply_subagent_recommended_factors, run_subagent_harness
 from .token_metadata import TokenMetadataResolver
 from .token_security_normalizer import build_erc20_token_risk_profile
-from .types import AnalysisOptions, CalldataResolver, ContractReputationAdapter, SimulationAdapter, SubagentClient, ThreatIntelAdapter, TokenMetadataProvider
+from .types import AnalysisOptions, AddressProfileProvider, CalldataResolver, ContractReputationAdapter, SimulationAdapter, SubagentClient, ThreatIntelAdapter, TokenMetadataProvider
 from .utils import (
     DEAD_ADDRESSES,
     UNLIMITED_THRESHOLD,
@@ -59,6 +60,7 @@ def analyze_transaction(
     simulation_adapter: SimulationAdapter | None = None,
     contract_adapter: ContractReputationAdapter | None = None,
     threat_adapter: ThreatIntelAdapter | None = None,
+    address_profile_provider: AddressProfileProvider | None = None,
     token_metadata_provider: TokenMetadataProvider | None = None,
     subagent_client: SubagentClient | None = None,
 ) -> dict[str, Any]:
@@ -66,7 +68,7 @@ def analyze_transaction(
     mode = resolve_mode(options)
     allow_fixture_risk = options.allow_fixture_risk and mode != "production"
 
-    tx = payload.get("transaction") if isinstance(payload.get("transaction"), dict) else payload
+    tx = normalize_transaction_payload(payload)
     origin = payload.get("transactionOrigin") or payload.get("origin")
     chain = normalize_chain(payload.get("chainId") or tx.get("chainId"))
 
@@ -87,6 +89,7 @@ def analyze_transaction(
         simulation_adapter=simulation_adapter,
         contract_adapter=contract_adapter,
         threat_adapter=threat_adapter,
+        address_profile_provider=address_profile_provider,
         token_metadata_provider=token_metadata_provider,
     )
     evidence = orchestrator.collect(
@@ -99,6 +102,7 @@ def analyze_transaction(
         erc20_token_address=erc20_token_address,
     )
     decoded = evidence.decoded
+    address_profile = evidence.address_profile
     category, intent_description = classify_intent(decoded, value_wei)
     if erc20_token_address is None:
         erc20_token_address = erc20_token_target(category, to_addr)
@@ -131,6 +135,7 @@ def analyze_transaction(
         simulation=simulation,
         contract_reputation=contract_rep,
         threat_intel=threat_intel,
+        address_profile=address_profile,
         erc20_profile=erc20_profile,
         provider_health=evidence.provider_health,
         evidence_quality=evidence.evidence_quality,
@@ -211,6 +216,7 @@ def analyze_transaction(
         "evidence": {
             "chain": chain_evidence,
             "calldata": decoded,
+            "addressProfile": address_profile,
             "simulation": simulation,
             "contractReputation": contract_rep,
             "threatIntel": threat_intel,
@@ -222,6 +228,20 @@ def analyze_transaction(
         },
         "recommendation": build_recommendation(verdict["recommendedAction"], category, factors),
     }
+
+
+def normalize_transaction_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    transaction = payload.get("transaction")
+    if isinstance(transaction, dict):
+        return transaction
+    if isinstance(transaction, str):
+        try:
+            decoded = json.loads(transaction)
+        except json.JSONDecodeError:
+            return payload
+        if isinstance(decoded, dict):
+            return decoded
+    return payload
 
 
 def unsupported_result(input_ref: str, raw_chain: Any) -> dict[str, Any]:
@@ -466,7 +486,17 @@ def add_local_address_fixture_factor(
     )
 
 
-def apply_contract_reputation_rules(contract_rep: dict[str, Any], factors: list[dict[str, Any]], *, allow_fixture_risk: bool = True) -> None:
+def apply_contract_reputation_rules(
+    contract_rep: dict[str, Any],
+    factors: list[dict[str, Any]],
+    *,
+    allow_fixture_risk: bool = True,
+    address_profile: dict[str, Any] | None = None,
+) -> None:
+    if (address_profile or contract_rep.get("addressProfile") or {}).get("addressType") == "EOA":
+        return
+    if contract_rep.get("status") == "not_applicable":
+        return
     for fact in contract_rep.get("facts", []):
         if fact.get("risk") == "known_malicious_proxy" and allow_fixture_risk:
             add_factor(factors, "known_malicious_spender", "scam_phishing", "CRITICAL", 60, "spender 命中恶意代理样例", fact["summary"], {"spender": fact.get("address"), "source": fact.get("source"), "label": fact.get("label")})
@@ -507,13 +537,17 @@ def apply_threat_intel_rules(threat_intel: dict[str, Any], factors: list[dict[st
     for match in threat_intel.get("matches", []):
         if match.get("type") == "domain_phishing":
             add_factor(factors, "phishing_domain_match", "scam_phishing", "CRITICAL", 50, "来源域名命中钓鱼列表", "交易来源命中 MetaMask eth-phishing-detect。", match)
+        elif match.get("type") == "address_security":
+            severity = "CRITICAL" if str(match.get("severity", "")).lower() == "critical" else "HIGH"
+            score = 70 if severity == "CRITICAL" else 45
+            add_factor(factors, "goplus_address_security_match", "scam_phishing", severity, score, "GoPlus 地址风险命中", "GoPlus Malicious Address API 返回收款地址存在风险标记。", match)
         elif match.get("type") == "token_security":
             add_factor(factors, "goplus_token_security_flags", "technical", "HIGH", 30, "GoPlus 返回 token 风险标记", "GoPlus Token Security API 返回高风险 token 标记。", match)
         elif match.get("risk") == "known_malicious_proxy" and allow_fixture_risk:
             add_factor(factors, "known_malicious_spender", "scam_phishing", "CRITICAL", 60, "地址命中本地恶意代理样例", match.get("summary", "本地样例标记该地址存在恶意风险。"), match)
 
 
-def apply_simulation_rules(simulation: dict[str, Any], factors: list[dict[str, Any]]) -> None:
+def apply_simulation_rules(simulation: dict[str, Any], factors: list[dict[str, Any]], *, category: str | None = None) -> None:
     simulation_facts = simulation.get("facts", [])
     has_wallet_outflow = any(
         fact.get("type") in {"asset_change", "balance_change"} and fact.get("walletDirection") == "out"
@@ -524,6 +558,8 @@ def apply_simulation_rules(simulation: dict[str, Any], factors: list[dict[str, A
         if fact.get("type") == "revert_or_error":
             add_factor(factors, "simulation_revert_or_error", "uncertainty", "MEDIUM", 20, "交易模拟失败或 revert", "模拟返回失败或错误，不能把缺失结果视为安全。", fact, "live_provider")
         elif fact.get("type") in {"asset_change", "balance_change"} and fact.get("walletDirection") == "out":
+            if category == "NATIVE_TRANSFER":
+                continue
             amount = fact.get("amountFormatted") or fact.get("amountRaw") or "unknown amount"
             symbol = fact.get("symbol") or fact.get("tokenAddress") or "asset"
             add_factor(

@@ -55,6 +55,11 @@ class ThreatIntelAdapter(Protocol):
         ...
 
 
+class AddressProfileProvider(Protocol):
+    def inspect(self, chain_id: int, address: str | None) -> dict[str, Any]:
+        ...
+
+
 class TokenMetadataProvider(Protocol):
     def metadata(self, chain_id: int, address: str | None, contract_reputation: dict[str, Any] | None = None) -> dict[str, Any]:
         ...

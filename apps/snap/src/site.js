@@ -7,20 +7,53 @@ const sendRiskyButton = document.querySelector('#send-risky');
 const approveBscUsdtButton = document.querySelector('#approve-bsc-usdt');
 const sendCustomButton = document.querySelector('#send-custom');
 const customAddressInput = document.querySelector('#custom-address');
+const endpointSelect = document.querySelector('#endpoint-select');
+const networkSelect = document.querySelector('#network-select');
 
-const txRiskApiUrl = 'http://localhost:8000/tx-scan';
+const txRiskEndpoints = {
+  local: {
+    label: 'Local dev',
+    url: 'http://localhost:8000/tx-scan',
+    apiKey: null,
+  },
+  prod: {
+    label: 'Remote prod',
+    url: 'https://txriskagent-production.up.railway.app/tx-scan',
+    apiKey: 'change-me',
+  },
+};
 const normalAddress = '0x1111111111111111111111111111111111111111';
 const riskyAddress = '0x000000000000000000000000000000000000dead';
-const fakeAirdropTokenAddress = '0x1000000000000000000000000000000000000001';
-const fakeAirdropSpenderAddress = '0x3000000000000000000000000000000000000001';
-const pointOneEthInWeiHex = '0x16345785d8a0000';
-const uint256MaxHex =
-  '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+const pointOneNativeTokenInWeiHex = '0x16345785d8a0000';
 const ethMainnetChainId = '0x1';
 const bscChainId = '0x38';
+const nativeNetworks = {
+  eth: {
+    label: 'ETH',
+    chainId: ethMainnetChainId,
+    nativeSymbol: 'ETH',
+  },
+  bnb: {
+    label: 'BNB',
+    chainId: bscChainId,
+    nativeSymbol: 'BNB',
+    addEthereumChain: {
+      chainId: bscChainId,
+      chainName: 'BNB Smart Chain',
+      nativeCurrency: {
+        name: 'BNB',
+        symbol: 'BNB',
+        decimals: 18,
+      },
+      rpcUrls: ['https://bsc-dataseed.binance.org/'],
+      blockExplorerUrls: ['https://bscscan.com'],
+    },
+  },
+};
 const bscUsdtAddress = '0x55d398326f99059fF775485246999027B3197955';
 const atalisLoanAddress = '0xfEAd9619e88464e5aD1Ea9Df458dcc147F03ea0C';
 const tenUsdtWith18DecimalsHex = '0x8ac7230489e80000';
+let snapConnected = false;
 
 const print = (value) => {
   output.textContent =
@@ -43,18 +76,57 @@ const getCurrentCaip2ChainId = async (provider) => {
   return hexChainIdToCaip2(chainId);
 };
 
-const scanTransactionRisk = async (payload) => {
-  const response = await fetch(txRiskApiUrl, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
+const getSelectedEndpoint = () => {
+  const selectedKey = endpointSelect.value;
+
+  return txRiskEndpoints[selectedKey] ?? txRiskEndpoints.local;
+};
+
+const getSelectedNativeNetwork = () => {
+  const selectedKey = networkSelect.value;
+
+  return nativeNetworks[selectedKey] ?? nativeNetworks.eth;
+};
+
+const syncSnapEndpoint = async () => {
+  const provider = getProvider();
+  const endpointKey = endpointSelect.value;
+
+  return provider.request({
+    method: 'wallet_invokeSnap',
+    params: {
+      snapId,
+      request: {
+        method: 'setEndpoint',
+        params: {
+          endpoint: endpointKey,
+        },
+      },
     },
+  });
+};
+
+const scanTransactionRisk = async (payload) => {
+  const endpoint = getSelectedEndpoint();
+  const headers = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+
+  if (endpoint.apiKey) {
+    headers['X-API-Key'] = endpoint.apiKey;
+  }
+
+  const response = await fetch(endpoint.url, {
+    method: 'POST',
+    headers,
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    throw new Error(`TxRiskAgent API returned ${response.status}.`);
+    throw new Error(
+      `${endpoint.label} TxRiskAgent API returned ${response.status}.`,
+    );
   }
 
   return response.json();
@@ -72,82 +144,55 @@ const selectRiskReportFields = (risk) => ({
   recommendation: risk.recommendation,
 });
 
-const previewRiskReport = async (payload) => {
+const previewRiskReport = async (payload, context = {}) => {
+  const endpoint = getSelectedEndpoint();
+
   print({
-    status: 'Scanning transaction with TxRiskAgent...',
+    status: `Scanning transaction with TxRiskAgent (${endpoint.label})...`,
+    endpoint: endpoint.url,
+    ...context,
     request: payload,
   });
 
   const risk = await scanTransactionRisk(payload);
 
   print({
-    status: 'TxRiskAgent API response',
+    status: `TxRiskAgent API response (${endpoint.label})`,
+    endpoint: endpoint.url,
+    ...context,
     response: selectRiskReportFields(risk),
   });
 
   return risk;
 };
 
-const enableDemoActions = () => {
-  claimAirdropButton.disabled = false;
+const requestSnaps = async () => {
+  const provider = getProvider();
+
+  await provider.request({
+    method: 'wallet_requestSnaps',
+    params: {
+      [snapId]: {},
+    },
+  });
+  const endpoint = await syncSnapEndpoint();
+  snapConnected = true;
+
   sendNormalButton.disabled = false;
   sendRiskyButton.disabled = false;
   approveBscUsdtButton.disabled = false;
   sendCustomButton.disabled = false;
-};
-
-const isSnapsUnavailableError = (error) => {
-  const message = String(error?.message ?? '').toLowerCase();
-
-  return (
-    error?.code === -32601 ||
-    message.includes('wallet_requestsnaps') ||
-    message.includes('snaps') && message.includes('not available')
-  );
-};
-
-const getProviderClientVersion = async (provider) => {
-  try {
-    return await provider.request({ method: 'web3_clientVersion' });
-  } catch {
-    return 'unknown provider';
-  }
-};
-
-const requestSnaps = async () => {
-  const provider = getProvider();
-
-  try {
-    await provider.request({
-      method: 'wallet_requestSnaps',
-      params: {
-        [snapId]: {},
-      },
-    });
-
-    enableDemoActions();
-    print(`Snap connected: ${snapId}`);
-  } catch (error) {
-    if (!isSnapsUnavailableError(error)) {
-      throw error;
-    }
-
-    enableDemoActions();
-    print({
-      status: 'Snaps RPC unavailable; API-only demo enabled',
-      provider: await getProviderClientVersion(provider),
-      nextSteps: [
-        'Use MetaMask Flask for local Snap installation.',
-        'Disable or deprioritize other wallet extensions if this browser is not using MetaMask.',
-        'Reload this page after switching wallet extensions, then connect the Snap again.',
-        'You can still click Claim LAB-USDC airdrop here to test the TxRiskAgent page scan.',
-      ],
-    });
-  }
+  print({
+    status: `Snap connected: ${snapId}`,
+    endpoint,
+  });
 };
 
 const sendTransaction = async (to) => {
   const provider = getProvider();
+  await switchToSelectedNativeNetwork();
+  const network = getSelectedNativeNetwork();
+
   const accounts = await provider.request({
     method: 'eth_requestAccounts',
   });
@@ -160,12 +205,15 @@ const sendTransaction = async (to) => {
   const transaction = {
     from,
     to,
-    value: pointOneEthInWeiHex,
+    value: pointOneNativeTokenInWeiHex,
   };
   const risk = await previewRiskReport({
     chainId: await getCurrentCaip2ChainId(provider),
     transactionOrigin: window.location.origin,
     transaction,
+  }, {
+    network: network.label,
+    asset: network.nativeSymbol,
   });
 
   const txHash = await provider.request({
@@ -174,8 +222,9 @@ const sendTransaction = async (to) => {
   });
 
   print({
-    status: 'Transaction submitted',
+    status: `Transaction submitted on ${network.label}`,
     txHash,
+    network: network.label,
     response: selectRiskReportFields(risk),
   });
 };
@@ -189,94 +238,32 @@ const buildApproveCalldata = (spender, amount) =>
     amount,
   )}`;
 
-const claimFakeAirdrop = async () => {
-  const provider = getProvider();
-  await switchToEthereumMainnet();
-
-  const accounts = await provider.request({
-    method: 'eth_requestAccounts',
-  });
-  const from = accounts[0];
-
-  if (!from) {
-    throw new Error('No MetaMask account is connected.');
-  }
-
-  const transaction = {
-    from,
-    to: fakeAirdropTokenAddress,
-    value: '0x0',
-    data: buildApproveCalldata(fakeAirdropSpenderAddress, uint256MaxHex),
-  };
-  const risk = await previewRiskReport({
-    chainId: await getCurrentCaip2ChainId(provider),
-    transactionOrigin: `${window.location.origin}/claim-lab-usdc`,
-    transaction,
-  });
-  const shouldOpenWallet = window.confirm(
-    'Open MetaMask to view the Snap insight for this fake airdrop claim? Reject the transaction in MetaMask.',
-  );
-
-  if (!shouldOpenWallet) {
-    print({
-      status: 'Wallet prompt skipped',
-      response: selectRiskReportFields(risk),
-    });
-
-    return;
-  }
-
-  const txHash = await provider.request({
-    method: 'eth_sendTransaction',
-    params: [transaction],
-  });
-
-  print({
-    status: 'Airdrop claim transaction submitted',
-    txHash,
-    response: selectRiskReportFields(risk),
-  });
-};
-
-const switchToEthereumMainnet = async () => {
-  const provider = getProvider();
-
-  await provider.request({
-    method: 'wallet_switchEthereumChain',
-    params: [{ chainId: ethMainnetChainId }],
-  });
-};
-
-const switchToBsc = async () => {
+const switchToNetwork = async (network) => {
   const provider = getProvider();
 
   try {
     await provider.request({
       method: 'wallet_switchEthereumChain',
-      params: [{ chainId: bscChainId }],
+      params: [{ chainId: network.chainId }],
     });
   } catch (error) {
-    if (error.code !== 4902) {
+    if (error.code !== 4902 || !network.addEthereumChain) {
       throw error;
     }
 
     await provider.request({
       method: 'wallet_addEthereumChain',
-      params: [
-        {
-          chainId: bscChainId,
-          chainName: 'BNB Smart Chain',
-          nativeCurrency: {
-            name: 'BNB',
-            symbol: 'BNB',
-            decimals: 18,
-          },
-          rpcUrls: ['https://bsc-dataseed.binance.org/'],
-          blockExplorerUrls: ['https://bscscan.com'],
-        },
-      ],
+      params: [network.addEthereumChain],
     });
   }
+};
+
+const switchToSelectedNativeNetwork = async () => {
+  await switchToNetwork(getSelectedNativeNetwork());
+};
+
+const switchToBsc = async () => {
+  await switchToNetwork(nativeNetworks.bnb);
 };
 
 const approveBscUsdt = async () => {
@@ -334,7 +321,6 @@ sendNormalButton.addEventListener('click', async () => {
 
 sendRiskyButton.addEventListener('click', async () => {
   try {
-    await switchToEthereumMainnet();
     await sendTransaction(riskyAddress);
   } catch (error) {
     print(error.message);
@@ -357,6 +343,29 @@ approveBscUsdtButton.addEventListener('click', async () => {
   }
 });
 
+endpointSelect.addEventListener('change', async () => {
+  const endpoint = getSelectedEndpoint();
+
+  if (!snapConnected) {
+    print({
+      status: `Selected TxRisk endpoint: ${endpoint.label}`,
+      endpoint: endpoint.url,
+    });
+    return;
+  }
+
+  try {
+    const snapEndpoint = await syncSnapEndpoint();
+
+    print({
+      status: 'Snap TxRisk endpoint updated',
+      endpoint: snapEndpoint,
+    });
+  } catch (error) {
+    print(error.message);
+  }
+});
+
 sendCustomButton.addEventListener('click', async () => {
   try {
     const to = customAddressInput.value.trim();
@@ -373,7 +382,7 @@ sendCustomButton.addEventListener('click', async () => {
 
 try {
   getProvider();
-  print('MetaMask detected. Connect the local Snap to begin.');
+  print('MetaMask detected. Select a TxRisk endpoint, then connect the local Snap to begin.');
 } catch (error) {
   print(error.message);
 }

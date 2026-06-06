@@ -19,6 +19,7 @@ def minimal_context() -> RuleContext:
         simulation={},
         contract_reputation={},
         threat_intel={},
+        address_profile=None,
         erc20_profile=None,
         provider_health=[],
         evidence_quality={},

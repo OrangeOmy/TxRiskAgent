@@ -18,6 +18,7 @@ class RuleContext:
     simulation: dict[str, Any]
     contract_reputation: dict[str, Any]
     threat_intel: dict[str, Any]
+    address_profile: dict[str, Any] | None
     erc20_profile: dict[str, Any] | None
     provider_health: list[dict[str, Any]]
     evidence_quality: dict[str, Any]
@@ -97,7 +98,12 @@ def default_rule_engine() -> RuleEngine:
 
     def contract_rules(context: RuleContext) -> RuleResult:
         factors: list[dict[str, Any]] = []
-        legacy.apply_contract_reputation_rules(context.contract_reputation, factors, allow_fixture_risk=context.allow_fixture_risk)
+        legacy.apply_contract_reputation_rules(
+            context.contract_reputation,
+            factors,
+            allow_fixture_risk=context.allow_fixture_risk,
+            address_profile=context.address_profile,
+        )
         _tag_missing_source_type(factors, "live_provider")
         return RuleResult(factors)
 
@@ -109,7 +115,7 @@ def default_rule_engine() -> RuleEngine:
 
     def simulation_rules(context: RuleContext) -> RuleResult:
         factors: list[dict[str, Any]] = []
-        legacy.apply_simulation_rules(context.simulation, factors)
+        legacy.apply_simulation_rules(context.simulation, factors, category=context.intent.get("category"))
         _tag_missing_source_type(factors, "live_provider")
         return RuleResult(factors)
 

@@ -37,6 +37,17 @@ button:disabled {
   background: #a9b2bd;
 }
 
+select,
+input {
+  width: 100%;
+  border: 1px solid #cfd8e3;
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #fff;
+  color: #17212b;
+  font: inherit;
+}
+
 .shell {
   display: grid;
   min-height: 100vh;
@@ -73,6 +84,18 @@ h1 {
   color: #52616f;
   font-size: 17px;
   line-height: 1.6;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.field span {
+  color: #344351;
+  font-size: 14px;
+  font-weight: 800;
 }
 
 .actions {

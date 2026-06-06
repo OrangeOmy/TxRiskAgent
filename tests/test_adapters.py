@@ -18,6 +18,8 @@ class FakeClient:
         self.calls.append(("GET", url, params))
         for key, response in self.responses.items():
             if key in url:
+                if isinstance(response, Exception):
+                    raise response
                 return response
         return {}
 
@@ -339,10 +341,56 @@ def test_threat_intel_parses_goplus_and_metamask() -> None:
     client = FakeClient(
         {
             "token_security": {"code": 1, "result": {"0x0000000000000000000000000000000000000001": {"is_honeypot": "1"}}},
+            "address_security": {"code": 1, "result": {"malicious_address": "1"}},
             "config.json": {"blocklist": ["phish.example"], "allowlist": []},
         }
     )
     adapter = CompositeThreatIntelAdapter(client=client)
     result = adapter.inspect(1, ["0x0000000000000000000000000000000000000001"], "https://phish.example/path")
     match_types = {match["type"] for match in result["matches"]}
-    assert match_types >= {"token_security", "domain_phishing"}
+    assert match_types >= {"address_security", "token_security", "domain_phishing"}
+
+
+def test_goplus_contract_address_flag_alone_is_not_address_risk() -> None:
+    client = FakeClient(
+        {
+            "address_security": {"code": 1, "result": {"contract_address": "1", "malicious_address": "0"}},
+            "token_security": {"code": 1, "result": {}},
+            "config.json": {"blocklist": [], "allowlist": []},
+        }
+    )
+    adapter = CompositeThreatIntelAdapter(client=client)
+    result = adapter.inspect(56, ["0x8865c8ff2a1cf8b235143110244f340db8513876"], "https://app.example")
+    assert result["matches"] == []
+    assert result["providers"]["goplusAddress"]["addressReports"]["0x8865c8ff2a1cf8b235143110244f340db8513876"]["contract_address"] == "1"
+
+
+def test_goplus_address_security_continues_after_per_address_error() -> None:
+    class PerAddressClient(FakeClient):
+        def get_json(self, url: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
+            self.calls.append(("GET", url, params))
+            if "address_security/0x00000000000000000000000000000000000000aa" in url:
+                raise RuntimeError("temporary address failure")
+            if "address_security/0x00000000000000000000000000000000000000bb" in url:
+                return {"code": 1, "result": {"malicious_address": "1"}}
+            if "token_security" in url:
+                return {"code": 1, "result": {}}
+            if "config.json" in url:
+                return {"blocklist": [], "allowlist": []}
+            return {}
+
+    adapter = CompositeThreatIntelAdapter(client=PerAddressClient({}))
+    result = adapter.inspect(
+        1,
+        [
+            "0x00000000000000000000000000000000000000aa",
+            "0x00000000000000000000000000000000000000bb",
+        ],
+        "https://app.example",
+    )
+
+    assert {match["target"] for match in result["matches"] if match.get("type") == "address_security"} == {
+        "0x00000000000000000000000000000000000000bb"
+    }
+    assert result["providers"]["goplusAddress"]["status"] == "partial"
+    assert result["providers"]["goplusAddress"]["addressErrors"][0]["target"] == "0x00000000000000000000000000000000000000aa"

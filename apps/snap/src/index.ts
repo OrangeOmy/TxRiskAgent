@@ -4,7 +4,20 @@ import type {
 } from '@metamask/snaps-types';
 import { copyable, divider, heading, panel, text } from '@metamask/snaps-ui';
 
-const TX_RISK_API_URL = 'http://localhost:8000/tx-scan';
+const TX_RISK_ENDPOINTS = {
+  local: {
+    label: 'Local dev',
+    url: 'http://localhost:8000/tx-scan',
+    apiKey: null,
+  },
+  prod: {
+    label: 'Remote prod',
+    url: 'https://txriskagent-production.up.railway.app/tx-scan',
+    apiKey: 'change-me',
+  },
+} as const;
+
+type TxRiskEndpointKey = keyof typeof TX_RISK_ENDPOINTS;
 
 type RiskFactor = {
   id?: string;
@@ -65,17 +78,24 @@ const scanTransactionRisk = async (payload: {
   transactionOrigin: string;
   transaction: unknown;
 }): Promise<TxRiskResponse> => {
-  const response = await fetch(TX_RISK_API_URL, {
+  const endpoint = await getSelectedEndpoint();
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+
+  if (endpoint.apiKey) {
+    headers['X-API-Key'] = endpoint.apiKey;
+  }
+
+  const response = await fetch(endpoint.url, {
     method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    throw new Error(`TX risk API returned ${response.status}.`);
+    throw new Error(`${endpoint.label} TX risk API returned ${response.status}.`);
   }
 
   return (await response.json()) as TxRiskResponse;
@@ -84,6 +104,7 @@ const scanTransactionRisk = async (payload: {
 export const onRpcRequest: OnRpcRequestHandler = async ({ origin, request }) => {
   switch (request.method) {
     case 'hello': {
+      const endpoint = await getSelectedEndpoint();
       const approved = await snap.request({
         method: 'snap_dialog',
         params: {
@@ -91,6 +112,7 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ origin, request }) => 
           content: panel([
             heading('Hello from TxRiskAgent'),
             text(`Request origin: **${origin}**`),
+            text(`TxRisk endpoint: **${endpoint.label}**`),
             text('This dialog is rendered inside MetaMask by the Snap.'),
           ]),
         },
@@ -103,6 +125,17 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ origin, request }) => 
           : 'User rejected the Snap dialog.',
         timestamp: new Date().toISOString(),
       };
+    }
+
+    case 'setEndpoint': {
+      const endpointKey = parseEndpointKey(request.params);
+      await setEndpointKey(endpointKey);
+
+      return publicEndpoint(TX_RISK_ENDPOINTS[endpointKey]);
+    }
+
+    case 'getEndpoint': {
+      return publicEndpoint(await getSelectedEndpoint());
     }
 
     default:
@@ -280,3 +313,57 @@ const shortenInputRef = (value?: string) => {
 
   return `${value.slice(0, 18)}...${value.slice(-8)}`;
 };
+
+const parseEndpointKey = (params: unknown): TxRiskEndpointKey => {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    return 'local';
+  }
+
+  const endpoint = (params as { endpoint?: unknown }).endpoint;
+
+  if (endpoint === 'prod' || endpoint === 'local') {
+    return endpoint;
+  }
+
+  return 'local';
+};
+
+const getEndpointKey = async (): Promise<TxRiskEndpointKey> => {
+  const state = await snap.request({
+    method: 'snap_manageState',
+    params: {
+      operation: 'get',
+    },
+  });
+
+  if (
+    state &&
+    typeof state === 'object' &&
+    !Array.isArray(state) &&
+    ((state as { endpoint?: unknown }).endpoint === 'prod' ||
+      (state as { endpoint?: unknown }).endpoint === 'local')
+  ) {
+    return (state as { endpoint: TxRiskEndpointKey }).endpoint;
+  }
+
+  return 'local';
+};
+
+const setEndpointKey = async (endpoint: TxRiskEndpointKey) => {
+  await snap.request({
+    method: 'snap_manageState',
+    params: {
+      operation: 'update',
+      newState: {
+        endpoint,
+      },
+    },
+  });
+};
+
+const getSelectedEndpoint = async () => TX_RISK_ENDPOINTS[await getEndpointKey()];
+
+const publicEndpoint = (endpoint: (typeof TX_RISK_ENDPOINTS)[TxRiskEndpointKey]) => ({
+  label: endpoint.label,
+  url: endpoint.url,
+});

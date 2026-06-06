@@ -27,6 +27,9 @@ class CompositeThreatIntelAdapter:
         if origin in DOMAIN_FIXTURES:
             matches.append({"target": origin, "type": "domain_fixture", **DOMAIN_FIXTURES[origin]})
 
+        address_security = self._goplus_address_security(chain_id, addresses)
+        for match in address_security.get("matches", []):
+            matches.append(match)
         goplus = self._goplus_token_security(chain_id, addresses)
         for match in goplus.get("matches", []):
             matches.append(match)
@@ -37,7 +40,44 @@ class CompositeThreatIntelAdapter:
         return {
             "status": "ok" if matches else "no_matches",
             "matches": matches,
-            "providers": {"goplus": goplus, "metamask": metamask},
+            "providers": {"goplus": goplus, "goplusAddress": address_security, "metamask": metamask},
+        }
+
+    def _goplus_address_security(self, chain_id: int, addresses: list[str]) -> dict[str, Any]:
+        reports: dict[str, Any] = {}
+        errors: list[dict[str, Any]] = []
+        matches = []
+        for address in sorted(set(addr.lower() for addr in addresses if addr)):
+            try:
+                data = self.client.get_json(
+                    f"{self.goplus_base_url}/api/v1/address_security/{address}",
+                    params={"chain_id": str(chain_id)},
+                )
+            except Exception as exc:
+                errors.append({"target": address, "error": str(exc)[:300]})
+                continue
+            report = data.get("result") if isinstance(data.get("result"), dict) else {}
+            if not isinstance(report, dict):
+                continue
+            reports[address] = report
+            risk_flags = _goplus_address_risk_flags(report)
+            if risk_flags:
+                matches.append(
+                    {
+                        "source": "goplus",
+                        "target": address,
+                        "type": "address_security",
+                        "severity": "critical" if _has_critical_address_flag(risk_flags) else "high",
+                        "flags": risk_flags,
+                    }
+                )
+        status = "ok" if reports and not errors else "partial" if reports or errors else "no_addresses"
+        return {
+            "status": status,
+            "provider": "goplus_address_security",
+            "matches": matches,
+            "addressReports": reports,
+            "addressErrors": errors,
         }
 
     def _goplus_token_security(self, chain_id: int, addresses: list[str]) -> dict[str, Any]:
@@ -141,3 +181,45 @@ def _goplus_risk_flags(report: dict[str, Any]) -> list[str]:
         if value in {"1", 1, True}:
             flags.append(key)
     return flags
+
+
+def _goplus_address_risk_flags(report: dict[str, Any]) -> list[str]:
+    high_risk_keys = [
+        "blacklist_doubt",
+        "cybercrime",
+        "darkweb_transactions",
+        "data_source",
+        "fake_kyc",
+        "financial_crime",
+        "honeypot_related_address",
+        "malicious_address",
+        "mixer",
+        "number_of_malicious_contracts_created",
+        "phishing_activities",
+        "stealing_attack",
+    ]
+    flags: list[str] = []
+    for key in high_risk_keys:
+        value = report.get(key)
+        if value in {"1", 1, True}:
+            flags.append(key)
+        elif key == "number_of_malicious_contracts_created":
+            try:
+                if int(value or 0) > 0:
+                    flags.append(key)
+            except (TypeError, ValueError):
+                pass
+    return flags
+
+
+def _has_critical_address_flag(flags: list[str]) -> bool:
+    return bool(
+        {
+            "malicious_address",
+            "phishing_activities",
+            "stealing_attack",
+            "honeypot_related_address",
+            "number_of_malicious_contracts_created",
+        }
+        & set(flags)
+    )

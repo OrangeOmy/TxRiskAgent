@@ -16,13 +16,26 @@
           TxRiskAgent risk results inside MetaMask before signing.
         </p>
 
+        <label class="field">
+          <span>TxRisk endpoint</span>
+          <select id="endpoint-select">
+            <option value="local">Local dev</option>
+            <option value="prod">Remote prod</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Network</span>
+          <select id="network-select">
+            <option value="eth">ETH</option>
+            <option value="bnb">BNB</option>
+          </select>
+        </label>
+
         <div class="actions">
           <button id="connect">Connect Snap</button>
-          <button id="claim-airdrop" disabled>
-            Claim LAB-USDC airdrop
-          </button>
-          <button id="send-normal" disabled>Send 0.1 ETH to normal</button>
-          <button id="send-risky" disabled>Transfer 0.1 ETH to dead</button>
+          <button id="send-normal" disabled>Transfer 0.1 Native Token to normal</button>
+          <button id="send-risky" disabled>Transfer 0.1 Native Token to dead</button>
           <button id="approve-bsc-usdt" disabled>
             On BSC Chain, approve 10 USDT for 0xfEAd9619e88464e5aD1Ea9Df458dcc147F03ea0C (Atalis Loan)
           </button>
@@ -35,7 +48,7 @@
             spellcheck="false"
             placeholder="0x recipient address"
           />
-          <button id="send-custom" disabled>Send 0.1 ETH to this address</button>
+          <button id="send-custom" disabled>Transfer 0.1 Native Token to this address</button>
         </div>
 
         <pre id="output">Waiting for MetaMask...</pre>
