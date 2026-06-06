@@ -1,45 +1,75 @@
 # TxRiskAgent
 
-SignShield-style EVM pre-signature transaction risk analyzer.
+> SignShield-style EVM pre-signature transaction risk analyzer.
 
 The project analyzes wallet transaction JSON before signing. It decodes EVM calldata, classifies approvals/transfers/multicalls/unknown calls, enriches facts through optional real-world adapters, scores risk, and emits structured JSON plus Chinese plain-language warnings.
 For ERC20 interactions it also builds a token risk profile covering owner privileges, honeypot/sell restrictions, tax controls, proxy/source transparency, bytecode signals, holder concentration, and LP lock facts when available.
 
 ## Target Architecture
 
+The current repository is organized around multiple entry points that all converge on
+the same deterministic analyzer core. The Snap demo calls the HTTP service, the CLI
+reads local transaction JSON fixtures, and the Codex skill wraps the same scripts for
+agent workflows.
+
 ```mermaid
 flowchart TD
-  A["Transaction Input"] --> B["DefenseRuntime"]
-  B --> C["Input Normalizer"]
-  C --> D["Evidence Orchestrator"]
+  Snap["MetaMask Snap demo<br/>apps/snap"] --> HTTP["HTTP API<br/>signshield.http_service<br/>/tx-scan"]
+  CLI["CLI<br/>analyze_evm_tx.py / signshield.cli"] --> Runtime["DefenseRuntime<br/>signshield.runtime"]
+  Skill["Codex skill<br/>skills/signshield-risk"] --> CLI
+  HTTP --> Runtime
 
-  D --> D1["Calldata Resolver<br/>local + Sourcify + 4byte"]
-  D --> D2["Simulation<br/>Tenderly"]
-  D --> D3["Contract Reputation<br/>Etherscan / Blockscout"]
-  D --> D4["Threat Intel<br/>GoPlus / MetaMask"]
-  D --> D5["RPC Metadata<br/>explicit / public fallback"]
-  D --> D6["Fixture Provider<br/>offline only by default"]
+  Runtime --> Analyzer["analyze_transaction<br/>signshield.analyzer"]
+  Analyzer --> Normalize["Input normalization<br/>chain, origin, tx, calldata"]
+  Normalize --> Evidence["EvidenceOrchestrator<br/>signshield.evidence"]
 
-  D1 --> E["Normalized Evidence"]
-  D2 --> E
-  D3 --> E
-  D4 --> E
-  D5 --> E
-  D6 --> E
+  Evidence --> Calldata["Calldata decode and resolver<br/>local selectors + Sourcify/OpenChain + 4byte"]
+  Evidence --> Simulation["Simulation adapter<br/>Tenderly"]
+  Evidence --> AddressProfile["Address profile<br/>RPC eth_getCode<br/>EOA / CONTRACT / EIP-7702"]
+  AddressProfile --> ContractRep["Contract reputation<br/>Etherscan / Blockscout<br/>EIP-7702 delegate inspection"]
+  Evidence --> ThreatIntel["Threat intel<br/>GoPlus token/address + MetaMask domains"]
+  Evidence --> TokenMeta["Token metadata<br/>RPC or public fallback"]
+  Evidence --> Bytecode["Bytecode scanner<br/>derived contract signals"]
+  Evidence --> Fixtures["Fixtures<br/>offline demo/test data"]
 
-  E --> F["Provider Health"]
-  E --> G["Evidence Quality"]
-  E --> H["RuleContext"]
+  Calldata --> Bundle["EvidenceBundle"]
+  Simulation --> Bundle
+  AddressProfile --> Bundle
+  ContractRep --> Bundle
+  ThreatIntel --> Bundle
+  TokenMeta --> TokenProfile["ERC20 token risk profile<br/>security normalizer + ERC20 scoring"]
+  Bytecode --> TokenProfile
+  TokenProfile --> Bundle
+  Fixtures --> Bundle
 
-  H --> I["RuleEngine"]
-  I --> J["Risk Factors + Asset Impact"]
+  Bundle --> RuleContext["RuleContext<br/>intent, evidence, mode, quality"]
+  Bundle --> ProviderHealth["providerHealth"]
+  Bundle --> EvidenceQuality["evidenceQuality"]
 
-  F --> K["DecisionEngine"]
-  G --> K
-  J --> K
+  RuleContext --> Rules["RuleEngine<br/>branch/provider/simulation/ERC20 rules"]
+  Rules --> Factors["Risk factors + asset impact"]
+  Factors --> Subagent["Optional subagent harness<br/>dry-run or OpenAI review"]
+  Subagent --> AugmentedFactors["Augmented risk factors"]
 
-  K --> L["Final Risk Report"]
+  Factors --> Decision["DecisionEngine<br/>score, confidence, evidence gate"]
+  AugmentedFactors --> Decision
+  ProviderHealth --> Decision
+  EvidenceQuality --> Decision
+
+  Decision --> FullReport["Full report<br/>signshield-risk/v0.2"]
+  FullReport --> Compact["Compact CLI report<br/>signshield-risk-compact/v0.1"]
+  Compact --> Summary["Optional LLM summary"]
+  FullReport --> SnapInsight["Snap transaction insight UI"]
+  FullReport --> HttpResponse["HTTP JSON response + OpenAPI"]
+  FullReport --> OutputFiles["CLI stdout / output files"]
 ```
+
+High-level source map:
+
+- `skills/signshield-risk/scripts/signshield/`: analyzer core, adapters, rules, decisions, compact output, HTTP service, and subagent integration.
+- `apps/snap/`: MetaMask Snap transaction insight handler plus the browser demo UI.
+- `dump-tx/` and `tests/`: transaction fixtures and regression coverage.
+- `openapi.yaml`, `railway.json`, and `.env.example`: API marketplace, deployment, and runtime configuration surface.
 
 ## Quick Start
 
