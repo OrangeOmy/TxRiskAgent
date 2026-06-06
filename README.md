@@ -130,9 +130,14 @@ The Kimi loop is opt-in. It prompts a Kimi agent to first call the read-only
 `CollectEvmPrimitives` tool, which exposes normalized wallet input, decoded
 calldata, simulation, contract reputation, threat intelligence, ERC20 token
 risk profile, provider health, evidence quality, and deterministic candidate
-risk signals. The agent must return the same `signshield-risk/v0.2` JSON report
-shape. Invalid agent output falls back to deterministic analysis by default and
-records the failure under `evidence.agentLoop`.
+risk signals. The agent can then call additional read-only tools for web search
+and direct checks: `SearchWeb`, `FetchURL`, `InspectEvmAddress`,
+`ReadErc20Metadata`, `InspectContractReputation`, `InspectThreatIntel`, and
+`SimulateEvmTransaction`. The agent must return the same
+`signshield-risk/v0.2` JSON report shape plus a short user-safe
+`reasoningTrace` for UI display. Invalid agent output falls back to
+deterministic analysis by default and records the failure under
+`evidence.agentLoop`.
 
 `.env` is gitignored. Do not commit local API keys or provider tokens.
 

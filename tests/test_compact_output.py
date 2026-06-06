@@ -69,6 +69,29 @@ def test_low_risk_compact_report_keeps_minimal_shape() -> None:
     assert compact["summaryMeta"]["llm"]["status"] == "not_run"
 
 
+def test_compact_report_preserves_short_reasoning_trace() -> None:
+    full = {
+        "schemaVersion": "signshield-risk/v0.2",
+        "inputRef": "agent.json",
+        "verdict": {"riskLevel": "HIGH", "score": 65, "confidence": "MEDIUM", "recommendedAction": "REVIEW_OR_REJECT"},
+        "summary": "HIGH 风险：需要复核。",
+        "intent": {"category": "ERC20_APPROVAL", "decodedFunction": "approve(address,uint256)"},
+        "assetImpact": [],
+        "riskFactors": [],
+        "reasoningTrace": [
+            {"step": "decode", "summary": "Decoded ERC20 approval.", "evidenceRefs": ["evidence.calldata.function"]},
+            {"step": "web_search", "summary": "Search found no reputable match.", "evidenceRefs": []},
+        ],
+        "evidence": {"simulation": {"status": "not_run"}, "contractReputation": {"status": "not_run"}, "threatIntel": {"status": "not_run"}},
+        "recommendation": "建议复核后再签名。",
+    }
+
+    compact = compact_report(full)
+
+    assert compact["reasoningTrace"][0] == full["reasoningTrace"][0]
+    assert compact["reasoningTrace"][1] == {"step": "web_search", "summary": "Search found no reputable match."}
+
+
 def test_llm_summary_success_adds_summary_without_changing_verdict() -> None:
     compact = compact_report(analyze_transaction(load_dump("2026-06-02T11-14")))
     original_verdict = dict(compact["verdict"])

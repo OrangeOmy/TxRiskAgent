@@ -29,6 +29,13 @@ The CLI returns compact user-facing JSON by default. Use `--output-format full` 
       "sourceType": "deterministic_decode | live_provider | derived | subagent"
     }
   ],
+  "reasoningTrace": [
+    {
+      "step": "decode | web_search | onchain_check | simulation | reputation | threat_intel | decision",
+      "summary": "Short user-safe observation for UI display.",
+      "evidenceRefs": ["evidence.calldata.function"]
+    }
+  ],
   "evidenceStatus": {
     "simulation": {"status": "ok", "provider": "tenderly", "factCount": 2},
     "contractReputation": {"status": "ok"},
@@ -88,6 +95,13 @@ The analyzer and `--output-format full` return one full JSON object per input tr
       "title": "Short title",
       "description": "Specific evidence-based explanation.",
       "evidence": {}
+    }
+  ],
+  "reasoningTrace": [
+    {
+      "step": "input | decode | web_search | onchain_check | simulation | reputation | threat_intel | decision",
+      "summary": "Short user-safe observation. This is an audit trace, not private chain-of-thought.",
+      "evidenceRefs": ["evidence.calldata.function"]
     }
   ],
   "evidence": {

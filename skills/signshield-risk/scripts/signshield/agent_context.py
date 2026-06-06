@@ -227,6 +227,7 @@ def agent_output_contract() -> dict[str, Any]:
             "intent",
             "assetImpact",
             "riskFactors",
+            "reasoningTrace",
             "evidence",
             "recommendation",
         ],
@@ -245,5 +246,10 @@ def agent_output_contract() -> dict[str, Any]:
             "description": "specific evidence-based Chinese explanation",
             "evidence": "object containing only facts present in the primitive context",
             "sourceType": "agent_loop",
+        },
+        "reasoningTraceItem": {
+            "step": "input | decode | web_search | onchain_check | simulation | reputation | threat_intel | decision",
+            "summary": "short user-safe observation for UI display",
+            "evidenceRefs": ["dot.path.into.report"],
         },
     }

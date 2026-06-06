@@ -29,7 +29,7 @@ For low-risk reports, stay brief and do not manufacture concerns."""
 
 USER_PROMPT = """Return concise user-facing JSON.
 headline: one short sentence.
-keyFindings: 0-5 short bullets based only on keyRisks, assetImpact, and evidenceStatus.
+keyFindings: 0-5 short bullets based only on keyRisks, assetImpact, reasoningTrace, and evidenceStatus.
 userMessage: one paragraph in the same language style as the report summary.
 nextAction: a concise action aligned with verdict.recommendedAction.
 Return only the structured JSON object requested by the schema."""
@@ -125,6 +125,7 @@ def _summary_context(compact: dict[str, Any]) -> dict[str, Any]:
         "intent": compact.get("intent"),
         "assetImpact": compact.get("assetImpact"),
         "keyRisks": compact.get("keyRisks"),
+        "reasoningTrace": compact.get("reasoningTrace"),
         "evidenceStatus": compact.get("evidenceStatus"),
         "recommendation": compact.get("recommendation"),
     }

@@ -3,3 +3,11 @@ agent:
   extend: default
   tools:
     - "signshield.agent_tools:CollectEvmPrimitives"
+    - "signshield.agent_tools:DecodeEvmCalldata"
+    - "signshield.agent_tools:InspectEvmAddress"
+    - "signshield.agent_tools:ReadErc20Metadata"
+    - "signshield.agent_tools:InspectContractReputation"
+    - "signshield.agent_tools:InspectThreatIntel"
+    - "signshield.agent_tools:SimulateEvmTransaction"
+    - "signshield.agent_tools:SearchWeb"
+    - "signshield.agent_tools:FetchURL"

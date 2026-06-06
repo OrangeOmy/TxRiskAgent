@@ -19,6 +19,7 @@ def compact_report(full_result: dict[str, Any]) -> dict[str, Any]:
         "intent": _compact_intent(full_result.get("intent")),
         "assetImpact": [_compact_asset_impact(item) for item in _as_list(full_result.get("assetImpact"))],
         "keyRisks": _key_risks(_as_list(full_result.get("riskFactors"))),
+        "reasoningTrace": _reasoning_trace(_as_list(full_result.get("reasoningTrace"))),
         "evidenceStatus": _evidence_status(evidence),
         "recommendation": full_result.get("recommendation"),
         "summaryMeta": {"llm": {"status": "not_run"}},
@@ -80,6 +81,21 @@ def _key_risks(risk_factors: list[Any]) -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+def _reasoning_trace(items: list[Any]) -> list[dict[str, Any]]:
+    trace = []
+    for item in items[:8]:
+        if not isinstance(item, dict):
+            continue
+        compact = {
+            key: item.get(key)
+            for key in ("step", "summary", "evidenceRefs")
+            if item.get(key) not in (None, "", [])
+        }
+        if compact.get("step") and compact.get("summary"):
+            trace.append(compact)
+    return trace
 
 
 def _evidence_status(evidence: dict[str, Any]) -> dict[str, Any]:

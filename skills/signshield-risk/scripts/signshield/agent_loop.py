@@ -33,6 +33,7 @@ INTENT_CATEGORIES = {
 }
 FACTOR_DOMAINS = {"technical", "scam_phishing", "compliance", "uncertainty"}
 FACTOR_SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+TRACE_STEPS = {"input", "decode", "web_search", "onchain_check", "simulation", "reputation", "threat_intel", "decision"}
 
 
 class AgentLoopError(RuntimeError):
@@ -111,10 +112,15 @@ Required loop:
    - payload_json equal to the exact JSON payload below
    - input_ref equal to "{input_ref}"
    - mode equal to "{mode or "production"}"
-2. Use only facts returned by CollectEvmPrimitives. You may use deterministicRiskSignals as candidate risk factors, but you must make the final verdict yourself from the evidence.
-3. Do not invent source verification, labels, simulation results, token ownership facts, or threat intelligence.
-4. If live evidence is missing for UNKNOWN_CONTRACT, MULTICALL, large allowances, or NFT collection-wide approvals, reflect lower confidence or REVIEW_OR_REJECT instead of treating the transaction as safe.
-5. Keep technical risk, scam/phishing risk, compliance risk, and uncertainty separate in riskFactors.
+2. Then decide which extra read-only tools are useful:
+   - SearchWeb and FetchURL for dapp domain, token name, contract address, spender/operator, scam reports, docs, or explorer pages.
+   - InspectEvmAddress, ReadErc20Metadata, InspectContractReputation, InspectThreatIntel, and SimulateEvmTransaction for direct on-chain/provider checks.
+   For EVM-supported inputs with a recipient/token/spender address, perform at least one direct on-chain/provider check beyond CollectEvmPrimitives when the tool is applicable.
+3. Use only facts returned by tools. You may use deterministicRiskSignals as candidate risk factors, but you must make the final verdict yourself from the evidence.
+4. Do not invent source verification, labels, simulation results, token ownership facts, web search findings, or threat intelligence.
+5. If live evidence is missing for UNKNOWN_CONTRACT, MULTICALL, large allowances, or NFT collection-wide approvals, reflect lower confidence or REVIEW_OR_REJECT instead of treating the transaction as safe.
+6. Keep technical risk, scam/phishing risk, compliance risk, and uncertainty separate in riskFactors.
+7. Include a short reasoningTrace for UI display. This is not private chain-of-thought; it is a concise audit trail of tools used and facts observed.
 
 Return only one JSON object with this shape:
 {{
@@ -143,6 +149,13 @@ Return only one JSON object with this shape:
       "description": "Chinese evidence-based explanation",
       "evidence": {{}},
       "sourceType": "agent_loop"
+    }}
+  ],
+  "reasoningTrace": [
+    {{
+      "step": "input | decode | web_search | onchain_check | simulation | reputation | threat_intel | decision",
+      "summary": "Short user-safe observation, max one sentence.",
+      "evidenceRefs": ["evidence.calldata.function"]
     }}
   ],
   "evidence": {{
@@ -201,6 +214,7 @@ def validate_agent_report(report: dict[str, Any]) -> None:
         "intent",
         "assetImpact",
         "riskFactors",
+        "reasoningTrace",
         "evidence",
         "recommendation",
     }
@@ -228,6 +242,7 @@ def validate_agent_report(report: dict[str, Any]) -> None:
         raise AgentLoopError("assetImpact must be a list.")
     if not isinstance(report.get("riskFactors"), list):
         raise AgentLoopError("riskFactors must be a list.")
+    _validate_reasoning_trace(report.get("reasoningTrace"))
     if not isinstance(report.get("evidence"), dict):
         raise AgentLoopError("evidence must be an object.")
     for index, factor in enumerate(report["riskFactors"]):
@@ -245,6 +260,8 @@ def finalize_agent_report(report: dict[str, Any], *, input_ref: str, backend: st
     for factor in report.get("riskFactors", []):
         if isinstance(factor, dict):
             factor.setdefault("sourceType", "agent_loop")
+    if "reasoningTrace" not in report:
+        report["reasoningTrace"] = []
     return report
 
 
@@ -267,6 +284,25 @@ def _validate_factor(factor: Any, index: int) -> None:
         raise AgentLoopError(f"riskFactors[{index}].score must be an integer from 0 to 100.")
     if not isinstance(factor.get("evidence"), dict):
         raise AgentLoopError(f"riskFactors[{index}].evidence must be an object.")
+
+
+def _validate_reasoning_trace(value: Any) -> None:
+    if not isinstance(value, list):
+        raise AgentLoopError("reasoningTrace must be a list.")
+    if len(value) > 8:
+        raise AgentLoopError("reasoningTrace must contain at most 8 items.")
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise AgentLoopError(f"reasoningTrace[{index}] must be an object.")
+        step = item.get("step")
+        if step not in TRACE_STEPS:
+            raise AgentLoopError(f"reasoningTrace[{index}].step is invalid.")
+        summary = item.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            raise AgentLoopError(f"reasoningTrace[{index}].summary must be a non-empty string.")
+        refs = item.get("evidenceRefs", [])
+        if refs is not None and not isinstance(refs, list):
+            raise AgentLoopError(f"reasoningTrace[{index}].evidenceRefs must be a list.")
 
 
 def _run_coro_sync(coro: Any) -> Any:

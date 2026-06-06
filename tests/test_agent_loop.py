@@ -62,6 +62,18 @@ def valid_agent_report(input_ref: str = "<memory>") -> dict:
                 "evidence": {"source": "deterministicRiskSignals.0"},
             }
         ],
+        "reasoningTrace": [
+            {
+                "step": "decode",
+                "summary": "Decoded calldata shows an ERC20 approval.",
+                "evidenceRefs": ["evidence.calldata.function"],
+            },
+            {
+                "step": "decision",
+                "summary": "Large allowance and limited live evidence require review or rejection.",
+                "evidenceRefs": ["riskFactors.0"],
+            },
+        ],
         "evidence": {
             "calldata": {},
             "simulation": {"status": "not_run", "facts": []},
@@ -108,6 +120,7 @@ def test_agent_loop_report_is_used_when_fake_client_returns_valid_json() -> None
     assert result["verdict"]["recommendedAction"] == "REVIEW_OR_REJECT"
     assert result["evidence"]["agentLoop"] == {"status": "ok", "backend": "kimi"}
     assert result["riskFactors"][0]["sourceType"] == "agent_loop"
+    assert result["reasoningTrace"][0]["step"] == "decode"
 
 
 def test_agent_loop_failure_falls_back_to_deterministic_report() -> None:
