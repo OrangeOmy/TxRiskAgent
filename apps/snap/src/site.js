@@ -1,6 +1,7 @@
-const snapId = 'local:http://localhost:8080';
+const snapId = 'local:http://localhost:8081';
 const output = document.querySelector('#output');
 const connectButton = document.querySelector('#connect');
+const claimAirdropButton = document.querySelector('#claim-airdrop');
 const sendNormalButton = document.querySelector('#send-normal');
 const sendRiskyButton = document.querySelector('#send-risky');
 const approveBscUsdtButton = document.querySelector('#approve-bsc-usdt');
@@ -10,7 +11,11 @@ const customAddressInput = document.querySelector('#custom-address');
 const txRiskApiUrl = 'http://localhost:8000/tx-scan';
 const normalAddress = '0x1111111111111111111111111111111111111111';
 const riskyAddress = '0x000000000000000000000000000000000000dead';
+const fakeAirdropTokenAddress = '0x1000000000000000000000000000000000000001';
+const fakeAirdropSpenderAddress = '0x3000000000000000000000000000000000000001';
 const pointOneEthInWeiHex = '0x16345785d8a0000';
+const uint256MaxHex =
+  '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
 const ethMainnetChainId = '0x1';
 const bscChainId = '0x38';
 const bscUsdtAddress = '0x55d398326f99059fF775485246999027B3197955';
@@ -83,21 +88,62 @@ const previewRiskReport = async (payload) => {
   return risk;
 };
 
-const requestSnaps = async () => {
-  const provider = getProvider();
-
-  await provider.request({
-    method: 'wallet_requestSnaps',
-    params: {
-      [snapId]: {},
-    },
-  });
-
+const enableDemoActions = () => {
+  claimAirdropButton.disabled = false;
   sendNormalButton.disabled = false;
   sendRiskyButton.disabled = false;
   approveBscUsdtButton.disabled = false;
   sendCustomButton.disabled = false;
-  print(`Snap connected: ${snapId}`);
+};
+
+const isSnapsUnavailableError = (error) => {
+  const message = String(error?.message ?? '').toLowerCase();
+
+  return (
+    error?.code === -32601 ||
+    message.includes('wallet_requestsnaps') ||
+    message.includes('snaps') && message.includes('not available')
+  );
+};
+
+const getProviderClientVersion = async (provider) => {
+  try {
+    return await provider.request({ method: 'web3_clientVersion' });
+  } catch {
+    return 'unknown provider';
+  }
+};
+
+const requestSnaps = async () => {
+  const provider = getProvider();
+
+  try {
+    await provider.request({
+      method: 'wallet_requestSnaps',
+      params: {
+        [snapId]: {},
+      },
+    });
+
+    enableDemoActions();
+    print(`Snap connected: ${snapId}`);
+  } catch (error) {
+    if (!isSnapsUnavailableError(error)) {
+      throw error;
+    }
+
+    enableDemoActions();
+    print({
+      status: 'Snaps RPC unavailable; API-only demo enabled',
+      provider: await getProviderClientVersion(provider),
+      nextSteps: [
+        'Use MetaMask Flask for local Snap installation.',
+        'Disable or deprioritize other wallet extensions if this browser is not using MetaMask.',
+        'Reload this page after switching wallet extensions, then connect the Snap again.',
+        'You can still click Claim LAB-USDC airdrop here to test the TxRiskAgent page scan.',
+      ],
+    });
+  }
 };
 
 const sendTransaction = async (to) => {
@@ -142,6 +188,55 @@ const buildApproveCalldata = (spender, amount) =>
   `0x095ea7b3${padAddressForCalldata(spender)}${padHexQuantityForCalldata(
     amount,
   )}`;
+
+const claimFakeAirdrop = async () => {
+  const provider = getProvider();
+  await switchToEthereumMainnet();
+
+  const accounts = await provider.request({
+    method: 'eth_requestAccounts',
+  });
+  const from = accounts[0];
+
+  if (!from) {
+    throw new Error('No MetaMask account is connected.');
+  }
+
+  const transaction = {
+    from,
+    to: fakeAirdropTokenAddress,
+    value: '0x0',
+    data: buildApproveCalldata(fakeAirdropSpenderAddress, uint256MaxHex),
+  };
+  const risk = await previewRiskReport({
+    chainId: await getCurrentCaip2ChainId(provider),
+    transactionOrigin: `${window.location.origin}/claim-lab-usdc`,
+    transaction,
+  });
+  const shouldOpenWallet = window.confirm(
+    'Open MetaMask to view the Snap insight for this fake airdrop claim? Reject the transaction in MetaMask.',
+  );
+
+  if (!shouldOpenWallet) {
+    print({
+      status: 'Wallet prompt skipped',
+      response: selectRiskReportFields(risk),
+    });
+
+    return;
+  }
+
+  const txHash = await provider.request({
+    method: 'eth_sendTransaction',
+    params: [transaction],
+  });
+
+  print({
+    status: 'Airdrop claim transaction submitted',
+    txHash,
+    response: selectRiskReportFields(risk),
+  });
+};
 
 const switchToEthereumMainnet = async () => {
   const provider = getProvider();
@@ -241,6 +336,14 @@ sendRiskyButton.addEventListener('click', async () => {
   try {
     await switchToEthereumMainnet();
     await sendTransaction(riskyAddress);
+  } catch (error) {
+    print(error.message);
+  }
+});
+
+claimAirdropButton.addEventListener('click', async () => {
+  try {
+    await claimFakeAirdrop();
   } catch (error) {
     print(error.message);
   }

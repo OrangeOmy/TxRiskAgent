@@ -6,7 +6,7 @@
   "description": "MetaMask Snap demo for TxRiskAgent transaction insights.",
   "scripts": {
     "build": "mm-snap build && vite build --outDir site-dist",
-    "serve:snap": "mm-snap serve --port 8080",
+    "serve:snap": "mm-snap serve --port 8081",
     "serve:site": "vite --host 127.0.0.1 --port 5173",
     "start": "concurrently \"npm:serve:snap\" \"npm:serve:site\""
   },
