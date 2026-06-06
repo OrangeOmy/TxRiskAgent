@@ -1,0 +1,24 @@
+{
+  "name": "tx-risk-agent-snap-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MetaMask Snap demo for TxRiskAgent transaction insights.",
+  "scripts": {
+    "build": "mm-snap build && vite build --outDir site-dist",
+    "serve:snap": "mm-snap serve --port 8080",
+    "serve:site": "vite --host 127.0.0.1 --port 5173",
+    "start": "concurrently \"npm:serve:snap\" \"npm:serve:site\""
+  },
+  "dependencies": {
+    "@metamask/snaps-sdk": "^11.1.1",
+    "@metamask/snaps-types": "^3.1.0",
+    "@metamask/snaps-ui": "^3.1.0"
+  },
+  "devDependencies": {
+    "@metamask/snaps-cli": "^8.4.1",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

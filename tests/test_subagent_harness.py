@@ -56,7 +56,12 @@ def test_subagent_context_builder_shape() -> None:
         "source_semantic_privilege_review",
         "complex_honeypot_soft_rug_review",
         "protocol_domain_mismatch_review",
+        "simulation_trace_attack_path_review",
+        "unknown_or_multicall_intent_review",
     ]
+    assert context["providerHealth"] == []
+    assert context["evidenceQuality"] == {}
+    assert context["verdictPreSubagent"] == {}
     assert context["outputContract"]["status"] == "ok | skipped | error"
 
 
@@ -86,7 +91,26 @@ def test_fake_subagent_factor_merges_into_analysis() -> None:
     result = analyze_transaction(payload, options=AnalysisOptions(subagent_mode="live"), subagent_client=FakeSubagentClient())
     profile = result["evidence"]["erc20TokenRisk"]
     assert profile["subagentAssessments"][0]["id"] == "source_semantic_privilege_review"
-    assert "subagent_owner_sell_control" in {factor["id"] for factor in result["riskFactors"]}
+    subagent_factor = next(factor for factor in result["riskFactors"] if factor["id"] == "subagent_owner_sell_control")
+    assert subagent_factor["sourceType"] == "subagent"
+    assert subagent_factor["score"] == 20
+
+
+def test_unknown_contract_dry_run_gets_general_subagent_context() -> None:
+    payload = {
+        "chainId": "eip155:1",
+        "transaction": {
+            "from": "0xb7c360aaa4c2b9f727ff934baa6ba300ccc0f284",
+            "to": "0x3000000000000000000000000000000000004216",
+            "data": "0x12345678",
+            "value": "0x0",
+        },
+    }
+    result = analyze_transaction(payload, options=AnalysisOptions(subagent_mode="dry-run"))
+    subagent = result["evidence"]["subagent"]
+    assert subagent["status"] == "skipped"
+    assert subagent["context"]["tasks"] == ["unknown_or_multicall_intent_review"]
+    assert subagent["context"]["token"]["address"] is None
 
 
 def test_command_subagent_harness_accepts_json_stdout(tmp_path) -> None:

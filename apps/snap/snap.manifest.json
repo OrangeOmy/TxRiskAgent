@@ -1,0 +1,27 @@
+{
+  "version": "0.1.0",
+  "description": "TxRiskAgent transaction insight Snap demo.",
+  "proposedName": "TxRiskAgent Demo",
+  "source": {
+    "shasum": "LowrEs79z+rssbrpYJOEBWqHDVfA2rLMDoG9jsy6uIY=",
+    "location": {
+      "npm": {
+        "filePath": "dist/bundle.js",
+        "packageName": "tx-risk-agent-snap-demo",
+        "registry": "https://registry.npmjs.org/"
+      }
+    }
+  },
+  "initialPermissions": {
+    "endowment:rpc": {
+      "dapps": true
+    },
+    "endowment:transaction-insight": {
+      "allowTransactionOrigin": true
+    },
+    "endowment:network-access": {},
+    "snap_dialog": {}
+  },
+  "platformVersion": "11.1.1",
+  "manifestVersion": "0.1"
+}

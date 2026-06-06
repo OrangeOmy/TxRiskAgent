@@ -4,6 +4,15 @@ from copy import deepcopy
 from typing import Any
 
 
+DEFAULT_SUBAGENT_TASKS = [
+    "source_semantic_privilege_review",
+    "complex_honeypot_soft_rug_review",
+    "protocol_domain_mismatch_review",
+    "simulation_trace_attack_path_review",
+    "unknown_or_multicall_intent_review",
+]
+
+
 def build_subagent_context(
     *,
     chain: dict[str, Any],
@@ -17,14 +26,15 @@ def build_subagent_context(
     threat_intel: dict[str, Any],
     simulation: dict[str, Any],
     deterministic_risk_factors: list[dict[str, Any]],
+    provider_health: list[dict[str, Any]] | None = None,
+    evidence_quality: dict[str, Any] | None = None,
+    verdict_pre_subagent: dict[str, Any] | None = None,
+    tasks: list[str] | None = None,
 ) -> dict[str, Any]:
+    token_profile = token_profile if isinstance(token_profile, dict) else {}
     return {
         "schemaVersion": "signshield-subagent-context/v0.1",
-        "tasks": [
-            "source_semantic_privilege_review",
-            "complex_honeypot_soft_rug_review",
-            "protocol_domain_mismatch_review",
-        ],
+        "tasks": tasks or DEFAULT_SUBAGENT_TASKS,
         "chain": chain,
         "token": {"address": token_address, "metadata": deepcopy(token_profile.get("metadata", {}))},
         "origin": origin,
@@ -40,6 +50,9 @@ def build_subagent_context(
         "contractReputation": _summarize_contract_reputation(contract_reputation),
         "threatIntel": _summarize_threat_intel(threat_intel),
         "simulation": _summarize_simulation(simulation),
+        "providerHealth": deepcopy(provider_health or []),
+        "evidenceQuality": deepcopy(evidence_quality or {}),
+        "verdictPreSubagent": deepcopy(verdict_pre_subagent or {}),
         "deterministicRiskFactors": deepcopy(deterministic_risk_factors),
         "outputContract": {
             "status": "ok | skipped | error",

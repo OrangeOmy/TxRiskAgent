@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TxRiskAgent Snap Demo</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel">
+        <p class="eyebrow">TxRiskAgent Snap Demo</p>
+        <h1>Transaction insight playground</h1>
+        <p class="summary">
+          Install the local Snap, then send reproducible transactions and review
+          TxRiskAgent risk results inside MetaMask before signing.
+        </p>
+
+        <div class="actions">
+          <button id="connect">Connect Snap</button>
+          <button id="send-normal" disabled>Send 0.1 ETH to normal</button>
+          <button id="send-risky" disabled>Transfer 0.1 ETH to dead</button>
+          <button id="approve-bsc-usdt" disabled>
+            On BSC Chain, approve 10 USDT for 0xfEAd9619e88464e5aD1Ea9Df458dcc147F03ea0C (Atalis Loan)
+          </button>
+        </div>
+
+        <div class="custom-send">
+          <input
+            id="custom-address"
+            type="text"
+            spellcheck="false"
+            placeholder="0x recipient address"
+          />
+          <button id="send-custom" disabled>Send 0.1 ETH to this address</button>
+        </div>
+
+        <pre id="output">Waiting for MetaMask...</pre>
+      </section>
+    </main>
+
+    <script type="module" src="/src/site.js"></script>
+  </body>
+</html>

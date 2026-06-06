@@ -4,9 +4,11 @@ from typing import Any
 
 import requests
 
+from ..types import DEFAULT_REQUEST_TIMEOUT
+
 
 class HttpClient:
-    def __init__(self, timeout: float = 8.0, session: requests.Session | None = None) -> None:
+    def __init__(self, timeout: float = DEFAULT_REQUEST_TIMEOUT, session: requests.Session | None = None) -> None:
         self.timeout = timeout
         self.session = session or requests.Session()
 

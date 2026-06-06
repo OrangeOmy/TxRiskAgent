@@ -99,19 +99,21 @@ def add_factor(
     title: str,
     description: str,
     evidence: dict[str, Any] | None = None,
+    source_type: str | None = None,
 ) -> None:
     normalized_evidence = evidence or {}
     for existing in factors:
         if existing.get("id") == factor_id:
             return
-    factors.append(
-        {
-            "id": factor_id,
-            "domain": domain,
-            "severity": severity,
-            "score": score,
-            "title": title,
-            "description": description,
-            "evidence": normalized_evidence,
-        }
-    )
+    factor = {
+        "id": factor_id,
+        "domain": domain,
+        "severity": severity,
+        "score": score,
+        "title": title,
+        "description": description,
+        "evidence": normalized_evidence,
+    }
+    if source_type:
+        factor["sourceType"] = source_type
+    factors.append(factor)

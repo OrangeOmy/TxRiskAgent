@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from typing import Any
@@ -19,7 +20,7 @@ class CommandSubagentClient:
     def assess(self, context: dict[str, Any]) -> dict[str, Any]:
         try:
             completed = subprocess.run(
-                shlex.split(self.command),
+                shlex.split(self.command, posix=os.name != "nt"),
                 input=json.dumps(context, ensure_ascii=False),
                 text=True,
                 capture_output=True,
@@ -102,8 +103,9 @@ def apply_subagent_recommended_factors(result: dict[str, Any], factors: list[dic
                 str(factor.get("id") or assessment["id"]),
                 str(factor.get("domain") or "uncertainty"),
                 str(factor.get("severity") or assessment["severity"]),
-                int(factor.get("score") or 0),
+                min(max(int(factor.get("score") or 0), 0), 30),
                 str(factor.get("title") or "Subagent 风险判断"),
                 str(factor.get("description") or assessment["conclusion"]),
                 factor.get("evidence") if isinstance(factor.get("evidence"), dict) else {"assessmentId": assessment["id"]},
+                source_type="subagent",
             )

@@ -1,0 +1,165 @@
+openapi: 3.1.0
+info:
+  title: TxRiskAgent HTTP Service
+  description: Pre-signature EVM transaction risk scanner.
+  version: 0.1.0
+paths:
+  /health:
+    get:
+      summary: Health
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Health Health Get
+  /tx-scan:
+    post:
+      summary: Scan an EVM transaction before signing
+      operationId: tx_scan_tx_scan_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Tx Scan Tx Scan Post
+        '400':
+          description: Invalid JSON request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected scan failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionScanRequest'
+components:
+  schemas:
+    ErrorResponse:
+      properties:
+        error:
+          title: Error
+          type: string
+        message:
+          title: Message
+          type: string
+        requestId:
+          title: Requestid
+          type: string
+      required:
+      - error
+      - message
+      - requestId
+      title: ErrorResponse
+      type: object
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    TransactionScanRequest:
+      additionalProperties: true
+      properties:
+        chainId:
+          anyOf:
+          - type: string
+          - type: integer
+          - type: 'null'
+          default: null
+          description: EVM chain id as a number, decimal string, hex string, or CAIP-2
+            value such as eip155:1.
+          examples:
+          - eip155:1
+          title: Chainid
+        transactionOrigin:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Originating dapp or site URL, when available.
+          examples:
+          - https://app.example
+          title: Transactionorigin
+        transaction:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          description: Wallet transaction object. Flat transaction fields are also
+            accepted at the top level.
+          examples:
+          - data: 0x
+            from: '0xb7c360aaa4c2b9f727ff934baa6ba300ccc0f284'
+            to: '0x000000000000000000000000000000000000dead'
+            value: '0x1'
+          title: Transaction
+      title: TransactionScanRequest
+      type: object
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+servers:
+- url: http://localhost:8000

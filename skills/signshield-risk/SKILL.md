@@ -133,6 +133,7 @@ Return JSON compatible with `references/output_schema.md`. Every result should i
 - Read `docs/airdrop-security-cases.md` when changing airdrop claim, Permit, NFT approval, multicall, or unknown-claim behavior.
 - Read `docs/airdrop-demo-storyline.md` when preparing or changing the hackathon demo script.
 - Read `dump-tx/certik-token-scan-erc20-risk-summary.md` when changing ERC20 token-risk profile fields or CertiK-style scoring rules.
+- Read `ACKNOWLEDGEMENTS.md` and linked research notes when changing ERC20 token-risk profile rules.
 - Use `scripts/analyze_evm_tx.py` as the deterministic baseline implementation.
 
 ## Validation

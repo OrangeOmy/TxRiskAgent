@@ -1,6 +1,57 @@
 # SignShield Output Schema
 
-The analyzer returns one JSON object per input transaction.
+The CLI returns compact user-facing JSON by default. Use `--output-format full` to return the full forensic evidence report.
+
+## Compact CLI Output
+
+```json
+{
+  "schemaVersion": "signshield-risk-compact/v0.1",
+  "inputRef": "path-or-id",
+  "verdict": {
+    "riskLevel": "LOW | MEDIUM | HIGH | CRITICAL | UNSUPPORTED",
+    "score": 0,
+    "confidence": "LOW | MEDIUM | HIGH",
+    "recommendedAction": "CONTINUE | CONTINUE_WITH_CAUTION | REDUCE_ALLOWANCE | USE_BURNER | REJECT | UNSUPPORTED"
+  },
+  "summary": "Deterministic plain-language summary.",
+  "intent": {
+    "category": "NATIVE_TRANSFER | ERC20_APPROVAL | NFT_APPROVAL | TOKEN_TRANSFER | MULTICALL | UNKNOWN_CONTRACT | UNSUPPORTED_CHAIN",
+    "decodedFunction": "approve(address,uint256)"
+  },
+  "assetImpact": [],
+  "keyRisks": [
+    {
+      "id": "large_or_unbounded_allowance",
+      "severity": "HIGH",
+      "title": "Short title",
+      "description": "Specific user-facing explanation.",
+      "sourceType": "deterministic_decode | live_provider | derived | subagent"
+    }
+  ],
+  "evidenceStatus": {
+    "simulation": {"status": "ok", "provider": "tenderly", "factCount": 2},
+    "contractReputation": {"status": "ok"},
+    "threatIntel": {"status": "no_matches", "matchCount": 0}
+  },
+  "recommendation": "Plain-language next action.",
+  "llmSummary": {
+    "headline": "Short LLM-generated user headline.",
+    "keyFindings": ["Concise finding based only on compact facts."],
+    "userMessage": "One user-facing paragraph.",
+    "nextAction": "Concise next action aligned with the deterministic verdict."
+  },
+  "summaryMeta": {
+    "llm": {"status": "ok | skipped | error"}
+  }
+}
+```
+
+The LLM summary layer is enabled by default for compact CLI output. It never changes verdict fields or risk factors. If the LLM is unavailable, the CLI still writes deterministic compact JSON with `summaryMeta.llm.status = "error"`. Use `--summary-llm off` to skip the LLM layer.
+
+## Full Evidence Output
+
+The analyzer and `--output-format full` return one full JSON object per input transaction.
 
 ```json
 {
@@ -41,7 +92,28 @@ The analyzer returns one JSON object per input transaction.
   ],
   "evidence": {
     "calldata": {},
-    "simulation": {},
+    "simulation": {
+      "status": "ok | config_missing | error | not_run",
+      "provider": "tenderly",
+      "facts": [
+        {
+          "type": "asset_change | balance_change | approval_change | revert_or_error | call_trace_present",
+          "walletDirection": "out | in | self | none",
+          "amountRaw": "1000000000000000000",
+          "amountFormatted": "1",
+          "symbol": "ETH",
+          "from": "0x...",
+          "to": "0x..."
+        }
+      ],
+      "rawSummary": {
+        "id": "simulation-id",
+        "status": true,
+        "gasUsed": 21000,
+        "assetChangeCount": 1,
+        "balanceChangeCount": 0
+      }
+    },
     "contractReputation": {},
     "threatIntel": {},
     "erc20TokenRisk": {

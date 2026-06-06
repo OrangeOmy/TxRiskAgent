@@ -61,7 +61,180 @@ def test_tenderly_config_missing_and_response_summary() -> None:
     result = TenderlySimulationAdapter("acct", "proj", "key", client=client).simulate(1, {"from": "0x0", "to": "0x1"})
     assert result["status"] == "ok"
     assert result["rawSummary"]["gasUsed"] == 21000
-    assert result["facts"][0]["type"] == "asset_changes"
+    assert result["facts"][0]["type"] == "asset_change"
+
+
+def test_tenderly_extracts_wallet_outflow_and_approval_logs() -> None:
+    wallet = "0x00000000000000000000000000000000000000aa"
+    spender = "0x00000000000000000000000000000000000000bb"
+    token = "0x00000000000000000000000000000000000000cc"
+    client = FakeClient(
+        {
+            "simulate": {
+                "simulation": {
+                    "id": "sim-2",
+                    "status": True,
+                    "transaction": {
+                        "transaction_info": {
+                            "gas_used": 42000,
+                            "asset_changes": [
+                                {
+                                    "type": "ERC20",
+                                    "from": wallet,
+                                    "to": spender,
+                                    "token_address": token,
+                                    "symbol": "USDC",
+                                    "decimals": 6,
+                                    "raw_amount": "1000000",
+                                }
+                            ],
+                            "logs": [
+                                {
+                                    "name": "Approval",
+                                    "address": token,
+                                    "inputs": [
+                                        {"name": "owner", "value": wallet},
+                                        {"name": "spender", "value": spender},
+                                        {"name": "value", "value": "0xffff"},
+                                    ],
+                                }
+                            ],
+                        }
+                    },
+                }
+            }
+        }
+    )
+
+    result = TenderlySimulationAdapter("acct", "proj", "key", client=client).simulate(1, {"from": wallet, "to": token, "gas": "0xb5f0", "gasPrice": "0x3b9aca00"})
+    assert result["rawSummary"]["gasUsed"] == 42000
+    assert client.calls[0][2]["simulation_type"] == "full"
+    assert client.calls[0][2]["gas"] == 46576
+    assert client.calls[0][2]["gas_price"] == "0"
+    assert client.calls[0][2]["state_objects"][wallet]["balance"] == "1000000000000000000000"
+    facts = result["facts"]
+    assert facts[0]["type"] == "asset_change"
+    assert facts[0]["walletDirection"] == "out"
+    assert facts[0]["amountFormatted"] == "1"
+    approval = next(fact for fact in facts if fact["type"] == "approval_change")
+    assert approval["owner"] == wallet
+    assert approval["spender"] == spender
+    assert approval["walletOwner"] is True
+
+
+def test_tenderly_extracts_top_level_transaction_info_from_full_response() -> None:
+    wallet = "0x00000000000000000000000000000000000000aa"
+    recipient = "0x000000000000000000000000000000000000dead"
+    client = FakeClient(
+        {
+            "simulate": {
+                "transaction": {
+                    "status": True,
+                    "transaction_info": {
+                        "asset_changes": [
+                            {
+                                "type": "Transfer",
+                                "from": wallet,
+                                "to": recipient,
+                                "amount": "0.1",
+                                "raw_amount": "100000000000000000",
+                                "token_info": {"type": "Native", "symbol": "ETH", "name": "Ether", "decimals": 18},
+                            }
+                        ],
+                        "balance_changes": [
+                            {"address": recipient, "dollar_value": "100"},
+                            {"address": wallet, "dollar_value": "-100"},
+                        ],
+                        "call_trace": {"calls": []},
+                    },
+                },
+                "simulation": {
+                    "id": "sim-full",
+                    "status": True,
+                    "gas_used": 21000,
+                    "block_number": 123,
+                },
+            }
+        }
+    )
+
+    result = TenderlySimulationAdapter("acct", "proj", "key", client=client).simulate(1, {"from": wallet, "to": recipient, "value": "0x16345785d8a0000", "gas": "0x5208"})
+
+    assert result["rawSummary"]["assetChangeCount"] == 1
+    assert result["rawSummary"]["balanceChangeCount"] == 2
+    assert result["rawSummary"]["gasUsed"] == 21000
+    asset_fact = next(fact for fact in result["facts"] if fact["type"] == "asset_change")
+    assert asset_fact["symbol"] == "ETH"
+    assert asset_fact["amountFormatted"] == "0.1"
+    assert asset_fact["walletDirection"] == "out"
+    assert any(fact["type"] == "call_trace_present" for fact in result["facts"])
+
+
+def test_tenderly_skips_approval_logs_without_decoded_fields() -> None:
+    client = FakeClient(
+        {
+            "simulate": {
+                "transaction": {
+                    "status": True,
+                    "transaction_info": {
+                        "logs": [
+                            {
+                                "name": "Approval",
+                                "address": "0x00000000000000000000000000000000000000cc",
+                            }
+                        ]
+                    },
+                },
+                "simulation": {"id": "sim-full", "status": True, "gas_used": 21000},
+            }
+        }
+    )
+
+    result = TenderlySimulationAdapter("acct", "proj", "key", client=client).simulate(
+        1,
+        {
+            "from": "0x00000000000000000000000000000000000000aa",
+            "to": "0x00000000000000000000000000000000000000cc",
+        },
+    )
+
+    assert all(fact["type"] != "approval_change" for fact in result["facts"])
+
+
+def test_tenderly_decimal_negative_balance_change_is_wallet_outflow() -> None:
+    wallet = "0x00000000000000000000000000000000000000aa"
+    client = FakeClient(
+        {
+            "simulate": {
+                "transaction": {
+                    "status": True,
+                    "transaction_info": {
+                        "balance_changes": [
+                            {
+                                "address": wallet,
+                                "amount": "-0.1",
+                                "token_info": {"symbol": "ETH", "decimals": 18},
+                            }
+                        ]
+                    },
+                },
+                "simulation": {"id": "sim-full", "status": True, "gas_used": 21000},
+            }
+        }
+    )
+
+    result = TenderlySimulationAdapter("acct", "proj", "key", client=client).simulate(
+        1,
+        {
+            "from": wallet,
+            "to": "0x000000000000000000000000000000000000dead",
+            "value": "0x0",
+        },
+    )
+
+    balance_fact = next(fact for fact in result["facts"] if fact["type"] == "balance_change")
+    assert balance_fact["walletDirection"] == "out"
+    assert balance_fact["amountFormatted"] == "-0.1"
 
 
 def test_contract_reputation_parses_etherscan_and_blockscout() -> None:

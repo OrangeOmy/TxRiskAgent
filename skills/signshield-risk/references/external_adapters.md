@@ -53,7 +53,11 @@ Provider behavior:
 
 - Calls Tenderly Simulation API only when all three settings are present.
 - Missing settings produce `{"status": "config_missing"}`.
-- Parsed facts are stored under `evidence.simulation.facts`.
+- Sends `network_id`, `from`, `to`, `input`, decimal `value`, numeric gas, and pre-sign state overrides used by full simulation.
+- Parses `transaction.transaction_info.asset_changes`, `balance_changes`, logs, revert/error fields, gas used, and call-trace presence.
+- Normalized facts are stored under `evidence.simulation.facts` as `asset_change`, `balance_change`, `approval_change`, `revert_or_error`, or `call_trace_present`.
+- Rules use wallet-relative facts to flag simulated wallet asset outflows and approval changes.
+- Use `source .env && python skills/signshield-risk/scripts/check_integrations.py` for a local Tenderly smoke check.
 
 ## 3. Etherscan / Blockscout Contract Adapter
 
@@ -170,7 +174,7 @@ Implementation:
 Provider behavior:
 
 - Token metadata uses local fixtures first, optional/selected RPC second, and explorer contract names as fallback.
-- GoPlus raw token reports are normalized into CertiK-style fields when available.
+- GoPlus raw token reports are normalized into the ERC20 token-risk profile fields when available.
 - Bytecode scanning is lightweight and only marks selector/opcode presence. It does not prove source-level semantics.
 - Missing holder/LP/deployment fields remain `null`.
 

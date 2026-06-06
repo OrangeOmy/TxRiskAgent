@@ -10,11 +10,14 @@ from .adapters import (
     SourcifyOpenChainResolver,
     TenderlySimulationAdapter,
 )
+from .adapters.http import HttpClient
 from .decode import decode_calldata
 from .contract_bytecode_scanner import scan_contract_bytecode
+from .decision import build_decision, confidence_for
 from .erc20_scoring import apply_erc20_token_profile_rules
+from .evidence import EvidenceOrchestrator, resolve_mode
 from .fixtures import ADDRESS_FIXTURES, TOKEN_FIXTURES
-from .scoring import recommended_action
+from .rules import RuleContext, default_rule_engine
 from .subagent_context_builder import build_subagent_context
 from .subagent_harness import apply_subagent_recommended_factors, run_subagent_harness
 from .token_metadata import TokenMetadataResolver
@@ -28,17 +31,17 @@ from .utils import (
     hex_to_int,
     normalize_address,
     normalize_chain,
-    risk_level,
 )
 
 
 def build_default_adapters(options: AnalysisOptions) -> dict[str, Any]:
     if not options.live:
         return {}
-    resolver = CombinedCalldataResolver([SourcifyOpenChainResolver(), FourByteDirectoryResolver()])
-    simulation = TenderlySimulationAdapter(options.tenderly_account, options.tenderly_project, options.tenderly_access_key)
-    contract = CompositeContractReputationAdapter(options.etherscan_api_key, options.blockscout_base_url)
-    threat = CompositeThreatIntelAdapter(options.goplus_base_url, options.metamask_config_url)
+    client = HttpClient(timeout=options.timeout)
+    resolver = CombinedCalldataResolver([SourcifyOpenChainResolver(client=client), FourByteDirectoryResolver(client=client)])
+    simulation = TenderlySimulationAdapter(options.tenderly_account, options.tenderly_project, options.tenderly_access_key, client=client)
+    contract = CompositeContractReputationAdapter(options.etherscan_api_key, options.blockscout_base_url, client=client)
+    threat = CompositeThreatIntelAdapter(options.goplus_base_url, options.metamask_config_url, client=client)
     return {
         "calldata_resolver": resolver,
         "simulation_adapter": simulation,
@@ -60,11 +63,8 @@ def analyze_transaction(
     subagent_client: SubagentClient | None = None,
 ) -> dict[str, Any]:
     options = options or AnalysisOptions()
-    defaults = build_default_adapters(options)
-    calldata_resolver = calldata_resolver or defaults.get("calldata_resolver")
-    simulation_adapter = simulation_adapter or defaults.get("simulation_adapter")
-    contract_adapter = contract_adapter or defaults.get("contract_adapter")
-    threat_adapter = threat_adapter or defaults.get("threat_adapter")
+    mode = resolve_mode(options)
+    allow_fixture_risk = options.allow_fixture_risk and mode != "production"
 
     tx = payload.get("transaction") if isinstance(payload.get("transaction"), dict) else payload
     origin = payload.get("transactionOrigin") or payload.get("origin")
@@ -77,32 +77,37 @@ def analyze_transaction(
     to_addr = normalize_address(tx.get("to"))
     data = tx.get("data") if isinstance(tx.get("data"), str) else "0x"
     value_wei = hex_to_int(tx.get("value"), 0)
-    decoded = decode_calldata(data, calldata_resolver)
-    category, intent_description = classify_intent(decoded, value_wei)
-    factors: list[dict[str, Any]] = []
-    impacts: list[dict[str, Any]] = []
-    limitations = []
-
-    simulation = simulation_adapter.simulate(chain.chain_id, tx) if simulation_adapter else {"status": "not_run", "facts": []}
-    contract_rep = contract_adapter.inspect(chain.chain_id, to_addr) if contract_adapter else {"status": "not_run", "facts": []}
-    addresses = collect_addresses(from_addr, to_addr, decoded)
-    threat_intel = threat_adapter.inspect(chain.chain_id, addresses, origin) if threat_adapter else {"status": "not_run", "matches": []}
-    erc20_token_address = erc20_token_target(category, to_addr)
-    token_metadata_resolver = token_metadata_provider or TokenMetadataResolver(options.rpc_url, public_fallback=options.live and options.public_rpc_fallback)
-    token_meta = token_metadata_resolver.metadata(chain.chain_id, erc20_token_address, contract_rep) if erc20_token_address else {}
-    bytecode_scan = scan_contract_bytecode(chain.chain_id, erc20_token_address, contract_rep) if erc20_token_address else {"status": "not_applicable", "signals": {}}
-    erc20_profile = (
-        build_erc20_token_risk_profile(
-            chain.chain_id,
-            erc20_token_address,
-            token_metadata=token_meta,
-            contract_reputation=contract_rep,
-            threat_intel=threat_intel,
-            bytecode_scan=bytecode_scan,
-        )
-        if erc20_token_address
-        else None
+    initial_decoded = decode_calldata(data, calldata_resolver)
+    initial_category, _ = classify_intent(initial_decoded, value_wei)
+    addresses = collect_addresses(from_addr, to_addr, initial_decoded)
+    erc20_token_address = erc20_token_target(initial_category, to_addr)
+    orchestrator = EvidenceOrchestrator(
+        options,
+        calldata_resolver=calldata_resolver,
+        simulation_adapter=simulation_adapter,
+        contract_adapter=contract_adapter,
+        threat_adapter=threat_adapter,
+        token_metadata_provider=token_metadata_provider,
     )
+    evidence = orchestrator.collect(
+        chain_id=chain.chain_id,
+        data=data,
+        tx=tx,
+        to_addr=to_addr,
+        addresses=addresses,
+        origin=origin,
+        erc20_token_address=erc20_token_address,
+    )
+    decoded = evidence.decoded
+    category, intent_description = classify_intent(decoded, value_wei)
+    if erc20_token_address is None:
+        erc20_token_address = erc20_token_target(category, to_addr)
+    simulation = evidence.simulation
+    contract_rep = evidence.contract_reputation
+    threat_intel = evidence.threat_intel
+    bytecode_scan = evidence.bytecode_scan
+    erc20_profile = evidence.erc20_profile
+    limitations = []
 
     if simulation.get("status") in {"not_run", "config_missing"}:
         limitations.append("No live transaction simulation was executed.")
@@ -111,27 +116,59 @@ def analyze_transaction(
     if threat_intel.get("status") in {"not_run", "config_missing"}:
         limitations.append("No live third-party threat intelligence was queried.")
 
-    apply_branch_rules(category, chain.chain_id, chain.caip2, tx, decoded, value_wei, from_addr, to_addr, impacts, factors)
-    apply_contract_reputation_rules(contract_rep, factors)
-    apply_threat_intel_rules(threat_intel, factors)
-    apply_simulation_rules(simulation, factors)
-    apply_erc20_token_profile_rules(erc20_profile, factors)
-
     intent = {"category": category, "description": intent_description, "decodedFunction": decoded.get("function")}
     chain_evidence = {"raw": chain.raw, "chainId": chain.chain_id, "caip2": chain.caip2, "name": chain.name}
-    if erc20_profile is not None:
+    context = RuleContext(
+        mode=mode,
+        chain=chain_evidence,
+        tx=tx,
+        origin=origin,
+        from_addr=from_addr,
+        to_addr=to_addr,
+        value_wei=value_wei,
+        decoded=decoded,
+        intent=intent,
+        simulation=simulation,
+        contract_reputation=contract_rep,
+        threat_intel=threat_intel,
+        erc20_profile=erc20_profile,
+        provider_health=evidence.provider_health,
+        evidence_quality=evidence.evidence_quality,
+        allow_fixture_risk=allow_fixture_risk,
+    )
+    rule_result = default_rule_engine().evaluate(context)
+    impacts = rule_result.asset_impacts
+    factors = rule_result.risk_factors
+    limitations.extend(rule_result.limitations)
+
+    subagent_result: dict[str, Any] | None = None
+    if should_run_subagent(options.subagent_mode, category, factors, erc20_profile, simulation, origin):
+        pre_subagent_verdict = build_decision(
+            category=category,
+            decoded=decoded,
+            simulation=simulation,
+            contract_reputation=contract_rep,
+            threat_intel=threat_intel,
+            factors=factors,
+            evidence_quality=evidence.evidence_quality,
+            mode=mode,
+        )
         subagent_context = build_subagent_context(
             chain=chain_evidence,
             token_address=erc20_token_address,
             origin=origin,
             intent=intent,
             decoded=decoded,
-            token_profile=erc20_profile,
+            token_profile=erc20_profile or {},
             bytecode_scan=bytecode_scan,
             contract_reputation=contract_rep,
             threat_intel=threat_intel,
             simulation=simulation,
             deterministic_risk_factors=factors,
+            provider_health=evidence.provider_health,
+            evidence_quality=evidence.evidence_quality,
+            verdict_pre_subagent=pre_subagent_verdict,
+            tasks=subagent_tasks(category, erc20_profile, simulation, origin),
         )
         subagent_result = run_subagent_harness(
             options.subagent_mode,
@@ -139,27 +176,35 @@ def analyze_transaction(
             command=options.subagent_command,
             client=subagent_client,
         )
-        erc20_profile["subagentAssessments"] = subagent_result.get("assessments", [])
-        erc20_profile["subagent"] = subagent_result
+        if erc20_profile is not None:
+            erc20_profile["subagentAssessments"] = subagent_result.get("assessments", [])
+            erc20_profile["subagent"] = subagent_result
         apply_subagent_recommended_factors(subagent_result, factors)
         if subagent_result.get("limitations"):
             limitations.extend(subagent_result["limitations"])
 
-    score = min(sum(int(factor["score"]) for factor in factors), 100)
-    level = risk_level(score)
-    action = recommended_action(level, factors)
-    confidence = confidence_for(category, decoded, simulation, contract_rep, threat_intel, factors)
+    verdict = build_decision(
+        category=category,
+        decoded=decoded,
+        simulation=simulation,
+        contract_reputation=contract_rep,
+        threat_intel=threat_intel,
+        factors=factors,
+        evidence_quality=evidence.evidence_quality,
+        mode=mode,
+    )
 
     return {
         "schemaVersion": "signshield-risk/v0.2",
         "inputRef": input_ref,
         "verdict": {
-            "riskLevel": level,
-            "score": score,
-            "confidence": confidence,
-            "recommendedAction": action,
+            "riskLevel": verdict["riskLevel"],
+            "score": verdict["score"],
+            "confidence": verdict["confidence"],
+            "recommendedAction": verdict["recommendedAction"],
+            "evidenceGate": verdict["evidenceGate"],
         },
-        "summary": build_summary(category, level, impacts, factors),
+        "summary": build_summary(category, verdict["riskLevel"], impacts, factors),
         "intent": intent,
         "assetImpact": impacts,
         "riskFactors": factors,
@@ -170,9 +215,12 @@ def analyze_transaction(
             "contractReputation": contract_rep,
             "threatIntel": threat_intel,
             "erc20TokenRisk": erc20_profile,
+            "subagent": subagent_result,
+            "providerHealth": evidence.provider_health,
+            "evidenceQuality": evidence.evidence_quality,
             "limitations": limitations,
         },
-        "recommendation": build_recommendation(action, category, factors),
+        "recommendation": build_recommendation(verdict["recommendedAction"], category, factors),
     }
 
 
@@ -232,6 +280,40 @@ def erc20_token_target(category: str, to_addr: str | None) -> str | None:
     return None
 
 
+def should_run_subagent(
+    subagent_mode: str,
+    category: str,
+    factors: list[dict[str, Any]],
+    erc20_profile: dict[str, Any] | None,
+    simulation: dict[str, Any],
+    origin: str | None,
+) -> bool:
+    if subagent_mode == "off":
+        return False
+    if erc20_profile is not None:
+        return True
+    if category in {"MULTICALL", "UNKNOWN_CONTRACT"}:
+        return True
+    if simulation.get("status") == "ok" and simulation.get("facts"):
+        return True
+    if origin and any(factor.get("id") in {"large_or_unbounded_allowance", "nft_collection_wide_approval"} for factor in factors):
+        return True
+    return False
+
+
+def subagent_tasks(category: str, erc20_profile: dict[str, Any] | None, simulation: dict[str, Any], origin: str | None) -> list[str]:
+    tasks = []
+    if erc20_profile is not None:
+        tasks.extend(["source_semantic_privilege_review", "complex_honeypot_soft_rug_review"])
+    if origin:
+        tasks.append("protocol_domain_mismatch_review")
+    if simulation.get("status") == "ok" and simulation.get("facts"):
+        tasks.append("simulation_trace_attack_path_review")
+    if category in {"MULTICALL", "UNKNOWN_CONTRACT"}:
+        tasks.append("unknown_or_multicall_intent_review")
+    return tasks or ["protocol_domain_mismatch_review"]
+
+
 def collect_addresses(*values: Any) -> list[str]:
     addresses: set[str] = set()
     for value in values:
@@ -259,6 +341,8 @@ def apply_branch_rules(
     to_addr: str | None,
     impacts: list[dict[str, Any]],
     factors: list[dict[str, Any]],
+    *,
+    allow_fixture_risk: bool = True,
 ) -> None:
     if category == "NATIVE_TRANSFER":
         formatted_native = format_units(value_wei, 18)
@@ -274,7 +358,8 @@ def apply_branch_rules(
         add_factor(factors, "native_value_transfer", "technical", "MEDIUM", 20, "原生币会离开钱包", f"签名后将从当前账户转出 {formatted_native} 个原生币到 {to_addr}。", {"valueWei": str(value_wei), "recipient": to_addr})
         if to_addr in DEAD_ADDRESSES:
             add_factor(factors, "burn_or_dead_recipient", "technical", "HIGH", 45, "收款地址是 burn/dead 地址", "收款人是常见销毁地址，转出的资产通常不可找回。", {"recipient": to_addr})
-        add_local_address_fixture_factor(factors, chain_id, to_addr, "known_malicious_recipient", "scam_phishing", "CRITICAL", 60, "收款地址命中本地风险样例", "recipient")
+        if allow_fixture_risk:
+            add_local_address_fixture_factor(factors, chain_id, to_addr, "known_malicious_recipient", "scam_phishing", "CRITICAL", 60, "收款地址命中本地风险样例", "recipient")
         return
 
     if category == "ERC20_APPROVAL":
@@ -297,7 +382,7 @@ def apply_branch_rules(
         if is_unlimited or amount_raw >= 10**24:
             add_factor(factors, "large_or_unbounded_allowance", "technical", "HIGH", 30, "授权额度很大或接近无限", "授权额度远高于一次普通操作需要的数量；spender 后续可能在授权有效期内继续转走代币。", {"amountRaw": str(amount_raw), "isUnlimited": is_unlimited})
         fixture = ADDRESS_FIXTURES.get((chain_id, spender or ""))
-        if fixture:
+        if fixture and allow_fixture_risk:
             add_factor(factors, "known_malicious_spender", "scam_phishing", "CRITICAL", 60, "spender 命中本地恶意代理样例", fixture["summary"], {"spender": spender, "source": fixture["source"], "label": fixture["label"]})
         return
 
@@ -316,7 +401,8 @@ def apply_branch_rules(
         )
         if approved:
             add_factor(factors, "nft_collection_wide_approval", "technical", "HIGH", 40, "NFT 全集授权", f"operator {operator} 将获得转移该 collection 下所有 NFT 的权限。", {"operator": operator, "collection": to_addr})
-            add_local_address_fixture_factor(factors, chain_id, operator, "known_malicious_operator", "scam_phishing", "CRITICAL", 60, "NFT operator 命中本地风险样例", "operator")
+            if allow_fixture_risk:
+                add_local_address_fixture_factor(factors, chain_id, operator, "known_malicious_operator", "scam_phishing", "CRITICAL", 60, "NFT operator 命中本地风险样例", "operator")
         return
 
     if category == "TOKEN_TRANSFER":
@@ -337,15 +423,18 @@ def apply_branch_rules(
         add_factor(factors, "token_transfer", "technical", "MEDIUM", 25, "代币会被转出", f"该交易会转出 {formatted} {token['symbol']} 到 {recipient}。", {"recipient": recipient, "amountRaw": str(amount_raw)})
         if recipient in DEAD_ADDRESSES:
             add_factor(factors, "burn_or_dead_recipient", "technical", "HIGH", 45, "收款地址是 burn/dead 地址", "代币接收方是常见销毁地址，转出的资产通常不可找回。", {"recipient": recipient})
-        add_local_address_fixture_factor(factors, chain_id, recipient, "known_malicious_recipient", "scam_phishing", "CRITICAL", 60, "代币接收地址命中本地风险样例", "recipient")
+        if allow_fixture_risk:
+            add_local_address_fixture_factor(factors, chain_id, recipient, "known_malicious_recipient", "scam_phishing", "CRITICAL", 60, "代币接收地址命中本地风险样例", "recipient")
         return
 
     if category == "MULTICALL":
-        add_local_address_fixture_factor(factors, chain_id, to_addr, "known_malicious_contract", "scam_phishing", "CRITICAL", 60, "聚合调用目标命中本地风险样例", "contract")
+        if allow_fixture_risk:
+            add_local_address_fixture_factor(factors, chain_id, to_addr, "known_malicious_contract", "scam_phishing", "CRITICAL", 60, "聚合调用目标命中本地风险样例", "contract")
         add_factor(factors, "multicall_requires_recursive_decode", "uncertainty", "MEDIUM", 25, "聚合调用需要递归解析", "当前识别到聚合执行入口，但尚未递归解析内部调用。", {"selector": decoded.get("selector"), "function": decoded.get("function")})
         return
 
-    add_local_address_fixture_factor(factors, chain_id, to_addr, "known_malicious_contract", "scam_phishing", "CRITICAL", 60, "目标合约命中本地风险样例", "contract")
+    if allow_fixture_risk:
+        add_local_address_fixture_factor(factors, chain_id, to_addr, "known_malicious_contract", "scam_phishing", "CRITICAL", 60, "目标合约命中本地风险样例", "contract")
     add_factor(factors, "unknown_selector_or_contract", "uncertainty", "MEDIUM", 25, "交易意图无法完整识别", "当前选择器库无法完整解释该 calldata，缺少模拟和合约透明度事实时不应视为安全。", {"selector": decoded.get("selector"), "to": to_addr})
 
 
@@ -377,9 +466,9 @@ def add_local_address_fixture_factor(
     )
 
 
-def apply_contract_reputation_rules(contract_rep: dict[str, Any], factors: list[dict[str, Any]]) -> None:
+def apply_contract_reputation_rules(contract_rep: dict[str, Any], factors: list[dict[str, Any]], *, allow_fixture_risk: bool = True) -> None:
     for fact in contract_rep.get("facts", []):
-        if fact.get("risk") == "known_malicious_proxy":
+        if fact.get("risk") == "known_malicious_proxy" and allow_fixture_risk:
             add_factor(factors, "known_malicious_spender", "scam_phishing", "CRITICAL", 60, "spender 命中恶意代理样例", fact["summary"], {"spender": fact.get("address"), "source": fact.get("source"), "label": fact.get("label")})
     for source_key in ("etherscan", "blockscout"):
         source = contract_rep.get(source_key)
@@ -414,22 +503,54 @@ def _source_signal_present(security_signals: dict[str, Any], key: str) -> bool:
     return isinstance(signal, dict) and bool(signal.get("present"))
 
 
-def apply_threat_intel_rules(threat_intel: dict[str, Any], factors: list[dict[str, Any]]) -> None:
+def apply_threat_intel_rules(threat_intel: dict[str, Any], factors: list[dict[str, Any]], *, allow_fixture_risk: bool = True) -> None:
     for match in threat_intel.get("matches", []):
         if match.get("type") == "domain_phishing":
             add_factor(factors, "phishing_domain_match", "scam_phishing", "CRITICAL", 50, "来源域名命中钓鱼列表", "交易来源命中 MetaMask eth-phishing-detect。", match)
         elif match.get("type") == "token_security":
             add_factor(factors, "goplus_token_security_flags", "technical", "HIGH", 30, "GoPlus 返回 token 风险标记", "GoPlus Token Security API 返回高风险 token 标记。", match)
-        elif match.get("risk") == "known_malicious_proxy":
+        elif match.get("risk") == "known_malicious_proxy" and allow_fixture_risk:
             add_factor(factors, "known_malicious_spender", "scam_phishing", "CRITICAL", 60, "地址命中本地恶意代理样例", match.get("summary", "本地样例标记该地址存在恶意风险。"), match)
 
 
 def apply_simulation_rules(simulation: dict[str, Any], factors: list[dict[str, Any]]) -> None:
-    for fact in simulation.get("facts", []):
+    simulation_facts = simulation.get("facts", [])
+    has_wallet_outflow = any(
+        fact.get("type") in {"asset_change", "balance_change"} and fact.get("walletDirection") == "out"
+        for fact in simulation_facts
+        if isinstance(fact, dict)
+    )
+    for fact in simulation_facts:
         if fact.get("type") == "revert_or_error":
-            add_factor(factors, "simulation_revert_or_error", "uncertainty", "MEDIUM", 20, "交易模拟失败或 revert", "模拟返回失败或错误，不能把缺失结果视为安全。", fact)
-        elif fact.get("type") in {"asset_changes", "balance_diff", "balance_diffs"}:
-            add_factor(factors, "simulation_asset_change_present", "technical", "MEDIUM", 20, "模拟显示资产变化", "交易模拟返回了资产或余额变化，需要与用户预期核对。", {"type": fact.get("type")})
+            add_factor(factors, "simulation_revert_or_error", "uncertainty", "MEDIUM", 20, "交易模拟失败或 revert", "模拟返回失败或错误，不能把缺失结果视为安全。", fact, "live_provider")
+        elif fact.get("type") in {"asset_change", "balance_change"} and fact.get("walletDirection") == "out":
+            amount = fact.get("amountFormatted") or fact.get("amountRaw") or "unknown amount"
+            symbol = fact.get("symbol") or fact.get("tokenAddress") or "asset"
+            add_factor(
+                factors,
+                "simulation_wallet_asset_outflow",
+                "technical",
+                "HIGH",
+                35,
+                "模拟显示钱包资产流出",
+                f"Tenderly 模拟显示当前钱包会流出 {amount} {symbol}，需要确认这是否符合预期。",
+                fact,
+                "live_provider",
+            )
+        elif fact.get("type") == "approval_change" and fact.get("walletOwner") is True:
+            add_factor(
+                factors,
+                "simulation_approval_change",
+                "technical",
+                "MEDIUM",
+                25,
+                "模拟显示授权状态变化",
+                "Tenderly 模拟显示当前钱包的授权状态会发生变化，需要确认 spender 和额度。",
+                fact,
+                "live_provider",
+            )
+        elif fact.get("type") in {"asset_change", "balance_change"} and not has_wallet_outflow:
+            add_factor(factors, "simulation_asset_change_present", "technical", "MEDIUM", 20, "模拟显示资产变化", "交易模拟返回了资产或余额变化，需要与用户预期核对。", {"type": fact.get("type")}, "live_provider")
 
 
 def confidence_for(category: str, decoded: dict[str, Any], simulation: dict[str, Any], contract_rep: dict[str, Any], threat_intel: dict[str, Any], factors: list[dict[str, Any]]) -> str:

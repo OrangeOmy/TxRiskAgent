@@ -6,8 +6,15 @@ __pycache__/
 
 # Local temporary render/cache files
 tmp/
+output/
 
 # Local secrets and ad-hoc environment files
 .env
 .env.*
 !.env.example
+
+# Snap demo build/runtime artifacts
+apps/snap/node_modules/
+apps/snap/dist/
+apps/snap/site-dist/
+apps/snap/*.log
