@@ -3,7 +3,7 @@
   "description": "TxRiskAgent transaction insight Snap demo.",
   "proposedName": "TxRiskAgent Demo",
   "source": {
-    "shasum": "dykx2I1GZZws3W46xrvpgFtsu9V4M3wkceoGs51TgV0=",
+    "shasum": "Qn43V9KSSXIfHXAbOJiRAkPRW0cAXxVP5VFFMvSLPvI=",
     "location": {
       "npm": {
         "filePath": "dist/bundle.js",
