@@ -18,8 +18,21 @@ def load_dump(name_prefix: str) -> dict:
 def test_bsc_approve_fixture_is_critical() -> None:
     result = analyze_transaction(load_dump("2026-06-02T09-47"))
     assert result["intent"]["category"] == "ERC20_APPROVAL"
+    assert result["intent"]["decodedFunction"] == "approve(address,uint256)"
     assert result["verdict"]["riskLevel"] == "CRITICAL"
     assert result["verdict"]["recommendedAction"] == "REJECT"
+    assert {factor["id"] for factor in result["riskFactors"]} >= {"erc20_approval", "known_malicious_spender"}
+
+
+def test_stringified_transaction_payload_is_decoded_like_object_payload() -> None:
+    payload = load_dump("2026-06-02T09-47")
+    payload["transaction"] = json.dumps(payload["transaction"])
+
+    result = analyze_transaction(payload)
+
+    assert result["intent"]["category"] == "ERC20_APPROVAL"
+    assert result["intent"]["decodedFunction"] == "approve(address,uint256)"
+    assert result["evidence"]["calldata"]["selector"] == "0x095ea7b3"
     assert {factor["id"] for factor in result["riskFactors"]} >= {"erc20_approval", "known_malicious_spender"}
 
 

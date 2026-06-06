@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .adapters import (
@@ -67,7 +68,7 @@ def analyze_transaction(
     mode = resolve_mode(options)
     allow_fixture_risk = options.allow_fixture_risk and mode != "production"
 
-    tx = payload.get("transaction") if isinstance(payload.get("transaction"), dict) else payload
+    tx = normalize_transaction_payload(payload)
     origin = payload.get("transactionOrigin") or payload.get("origin")
     chain = normalize_chain(payload.get("chainId") or tx.get("chainId"))
 
@@ -227,6 +228,20 @@ def analyze_transaction(
         },
         "recommendation": build_recommendation(verdict["recommendedAction"], category, factors),
     }
+
+
+def normalize_transaction_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    transaction = payload.get("transaction")
+    if isinstance(transaction, dict):
+        return transaction
+    if isinstance(transaction, str):
+        try:
+            decoded = json.loads(transaction)
+        except json.JSONDecodeError:
+            return payload
+        if isinstance(decoded, dict):
+            return decoded
+    return payload
 
 
 def unsupported_result(input_ref: str, raw_chain: Any) -> dict[str, Any]:

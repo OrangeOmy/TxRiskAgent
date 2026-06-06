@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import yaml
 
 from signshield.http_service import create_app, options_from_env
 from signshield.types import AnalysisOptions
@@ -96,6 +97,20 @@ def test_tx_scan_accepts_flat_transaction_payload() -> None:
     assert body["intent"]["category"] == "NATIVE_TRANSFER"
 
 
+def test_tx_scan_accepts_stringified_transaction_payload() -> None:
+    client = client_for_offline_service()
+    payload = load_dump("2026-06-02T09-47")
+    payload["transaction"] = json.dumps(payload["transaction"])
+
+    response = client.post("/tx-scan", json=payload)
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["intent"]["category"] == "ERC20_APPROVAL"
+    assert body["intent"]["decodedFunction"] == "approve(address,uint256)"
+    assert {factor["id"] for factor in body["riskFactors"]} >= {"erc20_approval", "known_malicious_spender"}
+
+
 def test_openapi_yaml_documents_tx_scan_security_and_body(monkeypatch) -> None:
     monkeypatch.setenv("TX_RISK_API_KEY", "expected-key")
     client = client_for_offline_service()
@@ -109,6 +124,11 @@ def test_openapi_yaml_documents_tx_scan_security_and_body(monkeypatch) -> None:
     assert "X-API-Key" in body
     assert "requestBody:" in body
     assert "TransactionScanRequest" in body
+    schema = yaml.safe_load(body)
+    transaction_schema = schema["components"]["schemas"]["TransactionScanRequest"]["properties"]["transaction"]
+    assert transaction_schema["type"] == "object"
+    assert transaction_schema["additionalProperties"] is True
+    assert "anyOf" not in transaction_schema
 
 
 def test_tx_scan_rejects_non_object_json() -> None:

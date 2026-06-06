@@ -222,6 +222,7 @@ def _openapi_schema(app: FastAPI) -> dict[str, Any]:
         by_alias=True,
         ref_template="#/components/schemas/{model}",
     )
+    _document_transaction_as_object(schemas["TransactionScanRequest"])
     schemas["ErrorResponse"] = ErrorResponse.model_json_schema(ref_template="#/components/schemas/{model}")
     components.setdefault("securitySchemes", {})["ApiKeyAuth"] = {
         "type": "apiKey",
@@ -243,6 +244,17 @@ def _openapi_schema(app: FastAPI) -> dict[str, Any]:
 
     app.openapi_schema = schema
     return schema
+
+
+def _document_transaction_as_object(schema: dict[str, Any]) -> None:
+    properties = schema.setdefault("properties", {})
+    transaction = properties.get("transaction")
+    if not isinstance(transaction, dict):
+        return
+
+    transaction.pop("anyOf", None)
+    transaction["type"] = "object"
+    transaction["additionalProperties"] = True
 
 
 def _bool_env(name: str, default: bool) -> bool:
