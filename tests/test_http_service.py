@@ -35,6 +35,19 @@ def test_health_reports_current_mode() -> None:
     }
 
 
+def test_root_lists_service_endpoints() -> None:
+    client = TestClient(create_app(options=AnalysisOptions(live=True, mode="production")))
+
+    response = client.get("/")
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["status"] == "ok"
+    assert body["service"] == "tx-risk-agent"
+    assert body["endpoints"]["docs"] == "/docs"
+    assert body["endpoints"]["scan"] == "/tx-scan"
+
+
 def test_tx_scan_returns_risk_report_and_request_id() -> None:
     client = client_for_offline_service()
 

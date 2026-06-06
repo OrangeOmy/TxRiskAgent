@@ -84,6 +84,21 @@ def create_app(*, runtime: DefenseRuntime | None = None, options: AnalysisOption
             allow_headers=["*"],
         )
 
+    @app.get("/")
+    def root() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "service": SERVICE_NAME,
+            "schemaVersion": SCHEMA_VERSION,
+            "mode": app.state.mode,
+            "endpoints": {
+                "health": "/health",
+                "docs": "/docs",
+                "openapi": "/openapi.yaml",
+                "scan": "/tx-scan",
+            },
+        }
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {
