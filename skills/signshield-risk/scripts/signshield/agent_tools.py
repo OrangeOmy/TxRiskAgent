@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
-from html import unescape
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import BaseModel, Field
-import requests
 
 from .adapters import CombinedCalldataResolver, CompositeContractReputationAdapter, CompositeThreatIntelAdapter, FourByteDirectoryResolver, SourcifyOpenChainResolver, TenderlySimulationAdapter
 from .adapters.http import HttpClient
@@ -207,44 +203,6 @@ class SimulateEvmTransaction(CallableTool2):  # type: ignore[misc,valid-type]
         return ToolOk(output=json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 
-class SearchWebParams(BaseModel):
-    query: str = Field(description="Search query text.")
-    limit: int = Field(default=5, ge=1, le=10, description="Maximum number of search results.")
-
-
-class SearchWeb(CallableTool2):  # type: ignore[misc,valid-type]
-    name: str = "SearchWeb"
-    description: str = "Search the public web for concise reputation/context signals. Use for dapp domains, token/contract names, scam reports, docs, and explorer pages."
-    params: type[SearchWebParams] = SearchWebParams
-
-    async def __call__(self, params: SearchWebParams) -> ToolReturnValue:
-        _ensure_sdk_tooling()
-        try:
-            results = _duckduckgo_search(params.query, params.limit)
-        except Exception as exc:
-            return ToolError(output="", message=str(exc), brief="Web search failed")
-        return ToolOk(output=json.dumps({"status": "ok" if results else "no_results", "query": params.query, "results": results}, ensure_ascii=False, sort_keys=True))
-
-
-class FetchURLParams(BaseModel):
-    url: str = Field(description="URL to fetch.")
-    max_chars: int = Field(default=6000, ge=500, le=20000, description="Maximum characters to return.")
-
-
-class FetchURL(CallableTool2):  # type: ignore[misc,valid-type]
-    name: str = "FetchURL"
-    description: str = "Fetch a web page and return compact text content with URL and HTTP status."
-    params: type[FetchURLParams] = FetchURLParams
-
-    async def __call__(self, params: FetchURLParams) -> ToolReturnValue:
-        _ensure_sdk_tooling()
-        try:
-            fetched = _fetch_url_text(params.url, params.max_chars)
-        except Exception as exc:
-            return ToolError(output="", message=str(exc), brief="Fetch URL failed")
-        return ToolOk(output=json.dumps(fetched, ensure_ascii=False, sort_keys=True))
-
-
 def _options_from_env(mode_override: str | None = None) -> AnalysisOptions:
     mode = (mode_override or os.getenv("SIGNSSHIELD_AGENT_MODE") or os.getenv("SIGNSSHIELD_HTTP_MODE") or "production").strip()
     if mode not in VALID_MODES:
@@ -291,64 +249,3 @@ def _float_env(name: str, default: float) -> float:
 def _ensure_sdk_tooling() -> None:
     if ToolOk is None or ToolError is None:
         raise RuntimeError("kimi-agent-sdk is not installed.")
-
-
-def _duckduckgo_search(query: str, limit: int) -> list[dict[str, str]]:
-    response = requests.get(
-        "https://duckduckgo.com/html/",
-        params={"q": query},
-        headers={"User-Agent": "Mozilla/5.0 TxRiskAgent/0.1"},
-        timeout=_float_env("SIGNSSHIELD_WEB_TIMEOUT", 8.0),
-    )
-    response.raise_for_status()
-    html = response.text
-    blocks = re.findall(r'<div class="result(?: results_links_deep web-result)?".*?</div>\s*</div>', html, flags=re.DOTALL)
-    if not blocks:
-        blocks = re.findall(r'<a[^>]+class="result__a"[^>]+href="[^"]+"[^>]*>.*?</a>.*?(?:<a|$)', html, flags=re.DOTALL)
-
-    results: list[dict[str, str]] = []
-    for block in blocks:
-        link = re.search(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, flags=re.DOTALL)
-        if not link:
-            continue
-        url = _normalize_ddg_url(unescape(link.group(1)))
-        title = _strip_html(link.group(2))
-        snippet_match = re.search(r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>|<div[^>]+class="result__snippet"[^>]*>(.*?)</div>', block, flags=re.DOTALL)
-        snippet = _strip_html(next((group for group in (snippet_match.groups() if snippet_match else ()) if group), ""))
-        if url and title:
-            results.append({"title": title, "url": url, "snippet": snippet})
-        if len(results) >= limit:
-            break
-    return results
-
-
-def _fetch_url_text(url: str, max_chars: int) -> dict[str, Any]:
-    response = requests.get(
-        url,
-        headers={"User-Agent": "Mozilla/5.0 TxRiskAgent/0.1"},
-        timeout=_float_env("SIGNSSHIELD_WEB_TIMEOUT", 8.0),
-    )
-    content_type = response.headers.get("content-type", "")
-    text = response.text or ""
-    if "html" in content_type.lower():
-        text = re.sub(r"(?is)<script.*?</script>|<style.*?</style>|<noscript.*?</noscript>", " ", text)
-        text = _strip_html(text)
-    else:
-        text = unescape(text)
-    text = re.sub(r"\s+", " ", text).strip()
-    if len(text) > max_chars:
-        text = text[:max_chars].rstrip() + "..."
-    return {"status": response.status_code, "url": response.url, "contentType": content_type, "text": text}
-
-
-def _normalize_ddg_url(url: str) -> str:
-    if url.startswith("//duckduckgo.com/l/") or url.startswith("/l/"):
-        parsed = urlparse("https://duckduckgo.com" + url if url.startswith("/") else "https:" + url)
-        target = parse_qs(parsed.query).get("uddg", [""])[0]
-        return unquote(target)
-    return url
-
-
-def _strip_html(value: str) -> str:
-    text = re.sub(r"<[^>]+>", " ", value)
-    return re.sub(r"\s+", " ", unescape(text)).strip()

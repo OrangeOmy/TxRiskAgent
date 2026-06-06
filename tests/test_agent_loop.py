@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from signshield import analyze_transaction
 from signshield.agent_context import build_agent_primitive_context
-from signshield.agent_loop import AgentLoopError, analyze_with_agent_loop
+from signshield.agent_loop import (
+    KIMI_CODE_BASE_URL,
+    KIMI_CODE_MODEL_KEY,
+    KIMI_CODE_PROVIDER_KEY,
+    KIMI_CODE_PROVIDER_MODEL,
+    AgentLoopError,
+    analyze_with_agent_loop,
+    build_kimi_code_config_from_env,
+    isolated_kimi_provider_env,
+    resolve_kimi_agent_model,
+)
 from signshield.types import AnalysisOptions
 
 
@@ -159,3 +170,49 @@ def test_agent_loop_can_be_configured_to_raise_on_invalid_output() -> None:
             options=AnalysisOptions(mode="offline", agent_loop="kimi", agent_loop_fallback=False),
             client=client,
         )
+
+
+def test_kimi_agent_model_defaults_to_kimi_code_model_key(monkeypatch) -> None:
+    monkeypatch.delenv("SIGNSSHIELD_AGENT_LOOP_MODEL", raising=False)
+    monkeypatch.delenv("KIMI_AGENT_MODEL", raising=False)
+
+    assert resolve_kimi_agent_model(AnalysisOptions(agent_loop="kimi")) == KIMI_CODE_MODEL_KEY
+
+
+def test_kimi_agent_model_uses_signshield_override(monkeypatch) -> None:
+    monkeypatch.setenv("SIGNSSHIELD_AGENT_LOOP_MODEL", "custom/model-key")
+
+    assert resolve_kimi_agent_model(AnalysisOptions(agent_loop="kimi")) == "custom/model-key"
+
+
+def test_kimi_code_config_from_env_uses_kimi_code_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("KIMI_API_KEY", "test-key")
+    monkeypatch.delenv("KIMI_BASE_URL", raising=False)
+    monkeypatch.delenv("KIMI_MODEL_NAME", raising=False)
+
+    config = build_kimi_code_config_from_env()
+
+    assert config is not None
+    assert config.default_model == KIMI_CODE_MODEL_KEY
+    model = config.models[KIMI_CODE_MODEL_KEY]
+    provider = config.providers[KIMI_CODE_PROVIDER_KEY]
+    assert model.model == KIMI_CODE_PROVIDER_MODEL
+    assert provider.base_url == KIMI_CODE_BASE_URL
+    assert provider.api_key.get_secret_value() == "test-key"
+    assert config.services.moonshot_search.base_url == f"{KIMI_CODE_BASE_URL}/search"
+    assert config.services.moonshot_fetch.base_url == f"{KIMI_CODE_BASE_URL}/fetch"
+
+
+def test_isolated_kimi_provider_env_temporarily_removes_provider_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("KIMI_API_KEY", "test-key")
+    monkeypatch.setenv("KIMI_BASE_URL", "https://example.invalid")
+    monkeypatch.setenv("KIMI_MODEL_NAME", "bad/model-key")
+
+    with isolated_kimi_provider_env(enabled=True):
+        assert "KIMI_API_KEY" not in os.environ
+        assert "KIMI_BASE_URL" not in os.environ
+        assert "KIMI_MODEL_NAME" not in os.environ
+
+    assert os.environ["KIMI_API_KEY"] == "test-key"
+    assert os.environ["KIMI_BASE_URL"] == "https://example.invalid"
+    assert os.environ["KIMI_MODEL_NAME"] == "bad/model-key"

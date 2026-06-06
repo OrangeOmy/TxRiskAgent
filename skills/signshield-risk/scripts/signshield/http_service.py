@@ -192,7 +192,7 @@ def options_from_env() -> AnalysisOptions:
         allow_fixture_risk=False,
         agent_loop=agent_loop,
         agent_loop_backend="kimi",
-        agent_loop_model=os.getenv("KIMI_MODEL_NAME"),
+        agent_loop_model=os.getenv("SIGNSSHIELD_AGENT_LOOP_MODEL") or os.getenv("KIMI_AGENT_MODEL"),
         agent_loop_timeout=_float_env("SIGNSSHIELD_AGENT_LOOP_TIMEOUT", DEFAULT_REQUEST_TIMEOUT),
         agent_loop_max_steps=_int_env("SIGNSSHIELD_AGENT_LOOP_MAX_STEPS", 6),
         agent_loop_fallback=_bool_env("SIGNSSHIELD_AGENT_LOOP_FALLBACK", True),

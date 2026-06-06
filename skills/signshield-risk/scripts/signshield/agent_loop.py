@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import json
 import os
 import threading
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
 
 from .agent_context import PRIMITIVE_CATALOG
 from .types import AnalysisOptions
@@ -34,6 +35,18 @@ INTENT_CATEGORIES = {
 FACTOR_DOMAINS = {"technical", "scam_phishing", "compliance", "uncertainty"}
 FACTOR_SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 TRACE_STEPS = {"input", "decode", "web_search", "onchain_check", "simulation", "reputation", "threat_intel", "decision"}
+KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1"
+KIMI_CODE_MODEL_KEY = "kimi-code/kimi-for-coding"
+KIMI_CODE_PROVIDER_KEY = "managed:kimi-code"
+KIMI_CODE_PROVIDER_MODEL = "kimi-for-coding"
+KIMI_CODE_CONTEXT_SIZE = 262144
+KIMI_ENV_PROVIDER_OVERRIDES = {
+    "KIMI_API_KEY",
+    "KIMI_BASE_URL",
+    "KIMI_MODEL_NAME",
+    "KIMI_MODEL_MAX_CONTEXT_SIZE",
+    "KIMI_MODEL_CAPABILITIES",
+}
 
 
 class AgentLoopError(RuntimeError):
@@ -55,19 +68,24 @@ class KimiAgentLoopClient:
         except Exception as exc:
             raise AgentLoopError(f"kimi-agent-sdk is unavailable: {exc}") from exc
 
+        config = build_kimi_code_config_from_env()
+        model = resolve_kimi_agent_model(options)
+
         async def collect() -> str:
             texts: list[str] = []
-            async for message in prompt(
-                prompt_text,
-                agent_file=self.agent_file,
-                yolo=True,
-                model=options.agent_loop_model or os.getenv("KIMI_MODEL_NAME") or None,
-                max_steps_per_turn=options.agent_loop_max_steps,
-                final_message_only=True,
-            ):
-                text = message.extract_text()
-                if text:
-                    texts.append(text)
+            with isolated_kimi_provider_env(enabled=config is not None):
+                async for message in prompt(
+                    prompt_text,
+                    config=config,
+                    agent_file=self.agent_file,
+                    yolo=True,
+                    model=model,
+                    max_steps_per_turn=options.agent_loop_max_steps,
+                    final_message_only=True,
+                ):
+                    text = message.extract_text()
+                    if text:
+                        texts.append(text)
             return "".join(texts)
 
         timeout = max(float(options.agent_loop_timeout or 0), 1.0)
@@ -115,6 +133,7 @@ Required loop:
 2. Then decide which extra read-only tools are useful:
    - SearchWeb and FetchURL for dapp domain, token name, contract address, spender/operator, scam reports, docs, or explorer pages.
    - InspectEvmAddress, ReadErc20Metadata, InspectContractReputation, InspectThreatIntel, and SimulateEvmTransaction for direct on-chain/provider checks.
+   If the primitive context includes an origin/domain, token name, contract address, spender, or operator, attempt at least one SearchWeb query and summarize useful or failed search evidence.
    For EVM-supported inputs with a recipient/token/spender address, perform at least one direct on-chain/provider check beyond CollectEvmPrimitives when the tool is applicable.
 3. Use only facts returned by tools. You may use deterministicRiskSignals as candidate risk factors, but you must make the final verdict yourself from the evidence.
 4. Do not invent source verification, labels, simulation results, token ownership facts, web search findings, or threat intelligence.
@@ -267,6 +286,82 @@ def finalize_agent_report(report: dict[str, Any], *, input_ref: str, backend: st
 
 def default_kimi_agent_file() -> Path:
     return Path(__file__).resolve().parents[2] / "agents" / "kimi.yaml"
+
+
+def resolve_kimi_agent_model(options: AnalysisOptions) -> str:
+    return options.agent_loop_model or os.getenv("SIGNSSHIELD_AGENT_LOOP_MODEL") or os.getenv("KIMI_AGENT_MODEL") or KIMI_CODE_MODEL_KEY
+
+
+def build_kimi_code_config_from_env() -> Any | None:
+    api_key = os.getenv("KIMI_API_KEY")
+    if not api_key:
+        return None
+    try:
+        from kimi_cli.config import Config, LLMModel, LLMProvider, MoonshotFetchConfig, MoonshotSearchConfig, Services
+        from pydantic import SecretStr
+    except Exception as exc:
+        raise AgentLoopError(f"kimi-agent-sdk config support is unavailable: {exc}") from exc
+
+    base_url = os.getenv("KIMI_BASE_URL") or KIMI_CODE_BASE_URL
+    provider_model = os.getenv("KIMI_MODEL_NAME") or KIMI_CODE_PROVIDER_MODEL
+    max_context_size = _int_env("KIMI_MODEL_MAX_CONTEXT_SIZE", KIMI_CODE_CONTEXT_SIZE)
+    return Config(
+        default_model=KIMI_CODE_MODEL_KEY,
+        default_thinking=True,
+        models={
+            KIMI_CODE_MODEL_KEY: LLMModel(
+                provider=KIMI_CODE_PROVIDER_KEY,
+                model=provider_model,
+                max_context_size=max_context_size,
+                capabilities={"thinking", "image_in", "video_in"},
+            )
+        },
+        providers={
+            KIMI_CODE_PROVIDER_KEY: LLMProvider(
+                type="kimi",
+                base_url=base_url,
+                api_key=SecretStr(api_key),
+            )
+        },
+        services=Services(
+            moonshot_search=MoonshotSearchConfig(
+                base_url=f"{base_url.rstrip('/')}/search",
+                api_key=SecretStr(api_key),
+            ),
+            moonshot_fetch=MoonshotFetchConfig(
+                base_url=f"{base_url.rstrip('/')}/fetch",
+                api_key=SecretStr(api_key),
+            ),
+        ),
+    )
+
+
+@contextmanager
+def isolated_kimi_provider_env(*, enabled: bool) -> Iterator[None]:
+    if not enabled:
+        yield
+        return
+    saved = {name: os.environ.get(name) for name in KIMI_ENV_PROVIDER_OVERRIDES}
+    try:
+        for name in KIMI_ENV_PROVIDER_OVERRIDES:
+            os.environ.pop(name, None)
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 
 def _validate_factor(factor: Any, index: int) -> None:
