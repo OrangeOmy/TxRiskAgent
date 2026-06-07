@@ -16,9 +16,12 @@ from signshield.agent_loop import (
     KIMI_CODE_PROVIDER_MODEL,
     AgentLoopError,
     analyze_with_agent_loop,
+    attach_tool_observability,
     build_kimi_code_config_from_env,
+    finalize_agent_report,
     isolated_kimi_provider_env,
     resolve_kimi_agent_model,
+    validate_agent_report,
 )
 from signshield.types import AnalysisOptions
 
@@ -199,6 +202,92 @@ def test_agent_loop_failure_records_redacted_diagnostics(monkeypatch) -> None:
     assert "secret-test-key" not in json.dumps(diagnostics)
 
 
+def test_finalize_agent_report_records_failed_search_attempt() -> None:
+    report = valid_agent_report("agent-ref")
+    report["reasoningTrace"] = [
+        {
+            "step": "decision",
+            "summary": "Large allowance requires review.",
+            "evidenceRefs": ["riskFactors.0"],
+        }
+    ]
+
+    result = finalize_agent_report(
+        report,
+        input_ref="agent-ref",
+        backend="kimi",
+        tool_events=[
+            {
+                "type": "tool_started",
+                "step": 2,
+                "toolCallId": "tool_search",
+                "tool": "SearchWeb",
+                "arguments": {"query": "spender scam report", "limit": 5},
+            },
+            {
+                "type": "tool_finished",
+                "step": 2,
+                "toolCallId": "tool_search",
+                "tool": "SearchWeb",
+                "status": "error",
+                "summary": "Failed to search",
+            },
+        ],
+    )
+
+    validate_agent_report(result)
+    assert result["evidence"]["webSearch"]["status"] == "error"
+    assert result["evidence"]["webSearch"]["attempts"][0] == {
+        "step": 2,
+        "query": "spender scam report",
+        "limit": 5,
+        "status": "error",
+        "summary": "Failed to search",
+    }
+    assert [item["step"] for item in result["reasoningTrace"]] == ["web_search", "decision"]
+    assert result["reasoningTrace"][0]["evidenceRefs"] == ["evidence.webSearch"]
+
+
+def test_attach_tool_observability_does_not_duplicate_existing_web_search_trace() -> None:
+    report = valid_agent_report("agent-ref")
+    report["reasoningTrace"] = [
+        {
+            "step": "web_search",
+            "summary": "Search found a relevant public report.",
+            "evidenceRefs": [],
+        },
+        {
+            "step": "decision",
+            "summary": "Public evidence and local facts require rejection.",
+            "evidenceRefs": ["riskFactors.0"],
+        },
+    ]
+
+    attach_tool_observability(
+        report,
+        [
+            {
+                "type": "tool_started",
+                "step": 2,
+                "toolCallId": "tool_search",
+                "tool": "SearchWeb",
+                "arguments": {"query": "Atlantis Loans hack", "limit": 5},
+            },
+            {
+                "type": "tool_finished",
+                "step": 2,
+                "toolCallId": "tool_search",
+                "tool": "SearchWeb",
+                "status": "ok",
+                "summary": "Title: Atlantis Loans Hack",
+            },
+        ],
+    )
+
+    assert result_steps(report).count("web_search") == 1
+    assert report["evidence"]["webSearch"]["status"] == "ok"
+
+
 def test_agent_loop_can_be_configured_to_raise_on_invalid_output() -> None:
     client = FakeAgentLoopClient({"bad": "shape"})
 
@@ -268,21 +357,31 @@ def test_kimi_agent_loop_client_does_not_clear_kimi_env_during_prompt(monkeypatc
     observed_env: dict[str, str | None] = {}
     observed_call: dict[str, Any] = {}
 
-    async def fake_prompt(*args: Any, **kwargs: Any):
+    class FakeKimiSession:
+        async def __aenter__(self) -> "FakeKimiSession":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def prompt(self, *_args: Any, **_kwargs: Any):
+            yield FakeKimiMessage(json.dumps(valid_agent_report("agent-ref")))
+
+    async def fake_create(*args: Any, **kwargs: Any) -> FakeKimiSession:
         observed_call.update(kwargs)
         observed_env["KIMI_API_KEY"] = os.getenv("KIMI_API_KEY")
         observed_env["KIMI_BASE_URL"] = os.getenv("KIMI_BASE_URL")
         observed_env["KIMI_MODEL_NAME"] = os.getenv("KIMI_MODEL_NAME")
-        yield FakeKimiMessage(json.dumps(valid_agent_report("agent-ref")))
+        return FakeKimiSession()
 
-    monkeypatch.setattr("kimi_agent_sdk.prompt", fake_prompt)
+    monkeypatch.setattr("kimi_agent_sdk.Session.create", fake_create)
 
     raw = KimiAgentLoopClient().run(
         "test prompt",
         options=AnalysisOptions(agent_loop="kimi", agent_loop_model=KIMI_CODE_MODEL_KEY),
     )
 
-    assert json.loads(raw)["inputRef"] == "agent-ref"
+    assert raw["inputRef"] == "agent-ref"
     assert observed_env == {
         "KIMI_API_KEY": "test-key",
         "KIMI_BASE_URL": KIMI_CODE_BASE_URL,
@@ -290,3 +389,7 @@ def test_kimi_agent_loop_client_does_not_clear_kimi_env_during_prompt(monkeypatc
     }
     assert observed_call["config"] is not None
     assert observed_call["model"] == KIMI_CODE_MODEL_KEY
+
+
+def result_steps(report: dict) -> list[str]:
+    return [item["step"] for item in report["reasoningTrace"]]

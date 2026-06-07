@@ -54,7 +54,7 @@ class AgentLoopError(RuntimeError):
 
 
 class AgentLoopClient(Protocol):
-    def run(self, prompt_text: str, *, options: AnalysisOptions) -> str:
+    def run(self, prompt_text: str, *, options: AnalysisOptions) -> str | dict[str, Any]:
         ...
 
 
@@ -62,30 +62,73 @@ class KimiAgentLoopClient:
     def __init__(self, agent_file: Path | None = None) -> None:
         self.agent_file = agent_file or default_kimi_agent_file()
 
-    def run(self, prompt_text: str, *, options: AnalysisOptions) -> str:
+    def run(self, prompt_text: str, *, options: AnalysisOptions) -> str | dict[str, Any]:
         try:
-            from kimi_agent_sdk import prompt
+            from kimi_agent_sdk import ApprovalRequest, Session
+            from kimi_cli.wire.types import StepBegin, ToolCall, ToolCallPart, ToolResult
         except Exception as exc:
             raise AgentLoopError(f"kimi-agent-sdk is unavailable: {exc}") from exc
 
         config = build_kimi_code_config_from_env()
         model = resolve_kimi_agent_model(options)
 
-        async def collect() -> str:
+        async def collect() -> dict[str, Any]:
             texts: list[str] = []
-            async for message in prompt(
-                prompt_text,
+            current_step = 0
+            tool_names: dict[str, str] = {}
+            tool_events: list[dict[str, Any]] = []
+            async with await Session.create(
                 config=config,
-                agent_file=self.agent_file,
-                yolo=True,
                 model=model,
+                yolo=True,
+                agent_file=self.agent_file,
                 max_steps_per_turn=options.agent_loop_max_steps,
-                final_message_only=True,
-            ):
-                text = message.extract_text()
-                if text:
-                    texts.append(text)
-            return "".join(texts)
+            ) as session:
+                async for message in session.prompt(prompt_text, merge_wire_messages=True):
+                    if isinstance(message, ApprovalRequest):
+                        message.resolve("approve")
+                        continue
+                    if isinstance(message, StepBegin):
+                        current_step = message.n
+                        continue
+                    if isinstance(message, ToolCall):
+                        tool_names[message.id] = message.function.name
+                        tool_events.append(
+                            {
+                                "type": "tool_started",
+                                "step": current_step,
+                                "toolCallId": message.id,
+                                "tool": message.function.name,
+                                "arguments": summarize_tool_arguments(message.function.name, message.function.arguments or ""),
+                            }
+                        )
+                        continue
+                    if isinstance(message, ToolCallPart):
+                        continue
+                    if isinstance(message, ToolResult):
+                        tool_name = tool_names.get(message.tool_call_id, "unknown")
+                        tool_events.append(
+                            {
+                                "type": "tool_finished",
+                                "step": current_step,
+                                "toolCallId": message.tool_call_id,
+                                "tool": tool_name,
+                                "status": "error" if message.return_value.is_error else "ok",
+                                "summary": summarize_tool_result(tool_name, message.return_value),
+                            }
+                        )
+                        continue
+                    text = text_from_content_part(message)
+                    if not text and hasattr(message, "extract_text"):
+                        text = message.extract_text()
+                    if text:
+                        texts.append(text)
+            raw = "".join(texts).strip()
+            if not raw:
+                raise AgentLoopError("Kimi agent loop ended without a final response.")
+            report = extract_json_object(raw)
+            attach_tool_observability(report, tool_events)
+            return report
 
         timeout = max(float(options.agent_loop_timeout or 0), 1.0)
         try:
@@ -267,7 +310,7 @@ def validate_agent_report(report: dict[str, Any]) -> None:
         _validate_factor(factor, index)
 
 
-def finalize_agent_report(report: dict[str, Any], *, input_ref: str, backend: str) -> dict[str, Any]:
+def finalize_agent_report(report: dict[str, Any], *, input_ref: str, backend: str, tool_events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     report["inputRef"] = input_ref
     evidence = report.setdefault("evidence", {})
     if isinstance(evidence, dict):
@@ -275,12 +318,204 @@ def finalize_agent_report(report: dict[str, Any], *, input_ref: str, backend: st
         limitations = evidence.get("limitations")
         if not isinstance(limitations, list):
             evidence["limitations"] = []
+    if tool_events is not None:
+        attach_tool_observability(report, tool_events)
     for factor in report.get("riskFactors", []):
         if isinstance(factor, dict):
             factor.setdefault("sourceType", "agent_loop")
     if "reasoningTrace" not in report:
         report["reasoningTrace"] = []
     return report
+
+
+def attach_tool_observability(report: dict[str, Any], tool_events: list[dict[str, Any]]) -> None:
+    search_attempts = _search_web_attempts(tool_events)
+    if not search_attempts:
+        return
+    evidence = report.setdefault("evidence", {})
+    if not isinstance(evidence, dict):
+        return
+    evidence["webSearch"] = {
+        "status": _aggregate_tool_status(search_attempts),
+        "attempts": search_attempts[:8],
+    }
+    trace = report.setdefault("reasoningTrace", [])
+    if not isinstance(trace, list) or any(isinstance(item, dict) and item.get("step") == "web_search" for item in trace):
+        return
+    _insert_reasoning_trace_item(
+        trace,
+        {
+            "step": "web_search",
+            "summary": _web_search_trace_summary(evidence["webSearch"]),
+            "evidenceRefs": ["evidence.webSearch"],
+        },
+    )
+
+
+def _search_web_attempts(tool_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    started: dict[str, dict[str, Any]] = {}
+    attempts: list[dict[str, Any]] = []
+    for event in tool_events:
+        if not isinstance(event, dict) or event.get("tool") != "SearchWeb":
+            continue
+        tool_call_id = str(event.get("toolCallId") or "")
+        if event.get("type") == "tool_started":
+            arguments = event.get("arguments") if isinstance(event.get("arguments"), dict) else {}
+            attempt = {
+                "step": event.get("step"),
+                "query": arguments.get("query"),
+                "limit": arguments.get("limit"),
+                "status": "started",
+            }
+            started[tool_call_id] = attempt
+            attempts.append(attempt)
+        elif event.get("type") == "tool_finished":
+            attempt = started.get(tool_call_id)
+            if attempt is None:
+                attempt = {"step": event.get("step")}
+                attempts.append(attempt)
+            attempt["status"] = event.get("status") or "unknown"
+            if event.get("summary"):
+                attempt["summary"] = event.get("summary")
+    return [{key: value for key, value in attempt.items() if value not in (None, "", [])} for attempt in attempts]
+
+
+def _aggregate_tool_status(attempts: list[dict[str, Any]]) -> str:
+    statuses = {str(attempt.get("status")) for attempt in attempts}
+    if "ok" in statuses:
+        return "ok"
+    if "error" in statuses:
+        return "error"
+    if "started" in statuses:
+        return "started"
+    return "unknown"
+
+
+def _web_search_trace_summary(web_search: dict[str, Any]) -> str:
+    attempts = web_search.get("attempts") if isinstance(web_search.get("attempts"), list) else []
+    status = web_search.get("status")
+    first = attempts[0] if attempts and isinstance(attempts[0], dict) else {}
+    query = first.get("query")
+    summary = first.get("summary")
+    if status == "ok":
+        return f"SearchWeb completed for query: {query}." if query else "SearchWeb completed."
+    if status == "error":
+        detail = f": {summary}" if summary else ""
+        return f"SearchWeb was attempted but failed{detail}."
+    return f"SearchWeb was attempted for query: {query}." if query else "SearchWeb was attempted."
+
+
+def _insert_reasoning_trace_item(trace: list[Any], item: dict[str, Any]) -> None:
+    insert_at = next((index for index, existing in enumerate(trace) if isinstance(existing, dict) and existing.get("step") == "decision"), len(trace))
+    trace.insert(insert_at, item)
+    while len(trace) > 8:
+        drop_at = next(
+            (
+                index
+                for index, existing in enumerate(trace)
+                if isinstance(existing, dict) and existing.get("step") not in {"web_search", "decision"}
+            ),
+            0,
+        )
+        trace.pop(drop_at)
+
+
+def summarize_tool_arguments(tool_name: str, arguments: str | None) -> dict[str, Any]:
+    if not arguments:
+        return {}
+    parsed = _json_or_none(arguments)
+    if not isinstance(parsed, dict):
+        return {"raw": "streaming_arguments_unavailable"}
+    if tool_name == "CollectEvmPrimitives":
+        return {
+            "input_ref": parsed.get("input_ref"),
+            "mode": parsed.get("mode"),
+            "payload": "wallet transaction JSON",
+        }
+    if "transaction_json" in parsed:
+        parsed = dict(parsed)
+        parsed["transaction_json"] = "wallet transaction JSON"
+    if "payload_json" in parsed:
+        parsed = dict(parsed)
+        parsed["payload_json"] = "wallet transaction JSON"
+    return parsed if len(json.dumps(parsed, ensure_ascii=False)) <= 1000 else {"raw": truncate_text(arguments, 500)}
+
+
+def summarize_tool_result(tool_name: str, return_value: Any) -> str:
+    brief = getattr(return_value, "brief", "")
+    if isinstance(brief, str) and brief.strip():
+        return truncate_text(brief.strip(), 500)
+    message = getattr(return_value, "message", "")
+    if isinstance(message, str) and message.strip():
+        return truncate_text(message.strip(), 500)
+    output_text = tool_output_text(getattr(return_value, "output", ""))
+    parsed = _json_or_none(output_text)
+    if isinstance(parsed, dict):
+        summary = summarize_json_tool_output(tool_name, parsed)
+        if summary:
+            return summary
+    return truncate_text(output_text, 500) if output_text else "Tool returned no visible output."
+
+
+def summarize_json_tool_output(tool_name: str, value: dict[str, Any]) -> str:
+    if tool_name == "CollectEvmPrimitives" or value.get("schemaVersion") == "signshield-agent-primitives/v0.1":
+        intent = value.get("intent") if isinstance(value.get("intent"), dict) else {}
+        verdict = value.get("preliminaryVerdict") if isinstance(value.get("preliminaryVerdict"), dict) else {}
+        signals = value.get("deterministicRiskSignals") if isinstance(value.get("deterministicRiskSignals"), list) else []
+        decoded = value.get("evidence", {}).get("calldata", {}) if isinstance(value.get("evidence"), dict) else {}
+        return (
+            f"Collected primitives: intent={intent.get('category')}, "
+            f"function={decoded.get('function')}, preliminaryRisk={verdict.get('riskLevel')}, "
+            f"signals={len(signals)}."
+        )
+    if tool_name == "InspectEvmAddress":
+        return f"Address check: type={value.get('addressType')}, hasCode={value.get('hasCode')}, chainId={value.get('chainId')}."
+    if tool_name == "ReadErc20Metadata":
+        return f"ERC20 metadata: {value.get('symbol') or 'UNKNOWN'} decimals={value.get('decimals')}."
+    if tool_name == "InspectContractReputation":
+        facts = value.get("facts") if isinstance(value.get("facts"), list) else []
+        return f"Contract reputation status={value.get('status')}, facts={len(facts)}."
+    if tool_name == "InspectThreatIntel":
+        matches = value.get("matches") if isinstance(value.get("matches"), list) else []
+        return f"Threat intel status={value.get('status')}, matches={len(matches)}."
+    if tool_name == "SimulateEvmTransaction":
+        facts = value.get("facts") if isinstance(value.get("facts"), list) else []
+        return f"Simulation status={value.get('status')}, facts={len(facts)}."
+    return ""
+
+
+def text_from_content_part(message: Any) -> str:
+    if getattr(message, "type", None) != "text":
+        return ""
+    text = getattr(message, "text", "")
+    return text if isinstance(text, str) else ""
+
+
+def tool_output_text(output: Any) -> str:
+    if isinstance(output, str):
+        return output
+    if isinstance(output, list):
+        parts: list[str] = []
+        for item in output:
+            text = text_from_content_part(item)
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+    return ""
+
+
+def truncate_text(value: str, max_chars: int) -> str:
+    text = " ".join(value.split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def _json_or_none(value: str) -> Any | None:
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return None
 
 
 def default_kimi_agent_file() -> Path:
