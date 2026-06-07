@@ -176,19 +176,19 @@ export SIGNSSHIELD_AGENT_LOOP_MODEL=kimi-code/kimi-for-coding
 uv run python skills/signshield-risk/scripts/analyze_evm_tx.py dump-tx/<file>.json --agent-loop kimi --output-format full
 ```
 
-The Kimi loop is opt-in. It prompts a Kimi agent to first call the read-only
-`CollectEvmPrimitives` tool, which exposes normalized wallet input, decoded
-calldata, simulation, contract reputation, threat intelligence, ERC20 token
-risk profile, provider health, evidence quality, and deterministic candidate
-risk signals. The agent can then call Kimi Agent SDK's built-in read-only
-`SearchWeb` and `FetchURL` tools, plus project read-only direct-check tools:
-`InspectEvmAddress`,
-`ReadErc20Metadata`, `InspectContractReputation`, `InspectThreatIntel`, and
-`SimulateEvmTransaction`. The agent must return the same
-`signshield-risk/v0.2` JSON report shape plus a short user-safe
+The Kimi loop is opt-in. The analyzer asks a Kimi Agent SDK session to first
+collect a normal TxRiskAgent primitive context, then enrich and judge the
+transaction with read-only tools. The registered tool set is:
+`SearchWeb`, `FetchURL`, `CollectEvmPrimitives`, `DecodeEvmCalldata`,
+`InspectEvmAddress`, `ReadErc20Metadata`, `InspectContractReputation`,
+`InspectThreatIntel`, and `SimulateEvmTransaction`. The agent must return the
+same `signshield-risk/v0.2` JSON report shape plus a short user-safe
 `reasoningTrace` for UI display. Invalid agent output falls back to
 deterministic analysis by default and records the failure under
 `evidence.agentLoop`.
+
+For the full Kimi agent loop architecture, tool catalog, observability fields,
+and failure behavior, see [docs/kimi-agent-loop.md](docs/kimi-agent-loop.md).
 
 Kimi Code uses the OpenAI-compatible provider endpoint
 `https://api.kimi.com/coding/v1` with provider model id `kimi-for-coding`.

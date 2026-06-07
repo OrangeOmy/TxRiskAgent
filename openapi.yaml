@@ -160,4 +160,4 @@ components:
       in: header
       name: X-API-Key
 servers:
-- url: https://txriskagent-production.up.railway.app
+- url: http://43.137.17.169
